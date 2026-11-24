@@ -81,7 +81,7 @@ def parse_args(rest: str) -> dict:
 
 def has_vars(d: dict) -> bool:
     blob = json.dumps([d.get("html"), d.get("buttons")], ensure_ascii=False)
-    return bool(VAR_RE.search(blob) or re.search(r"https?://link/?[\"<]", blob))
+    return bool(VAR_RE.search(blob) or re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob))
 
 
 def apply_vars(d: dict, vals: dict) -> dict:
@@ -90,7 +90,7 @@ def apply_vars(d: dict, vals: dict) -> dict:
         if not text:
             return text
         if esc:  # ссылка-заглушка https://link в тексте → настоящая ссылка
-            text = re.sub(r'href="https?://link/?"',
+            text = re.sub(r'href="https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?"',
                           lambda _: 'href="%s"' % _html.escape(vals.get("link", ""), quote=True), text)
         return VAR_RE.sub(lambda m: (_html.escape(vals[m.group(1)]) if esc else vals[m.group(1)])
                           if m.group(1) in vals else m.group(0), text)
@@ -102,7 +102,7 @@ def apply_vars(d: dict, vals: dict) -> dict:
             if b["type"] in ("stars", "gift", "page"):
                 continue
             v = sub(b.get("value") or "", False)
-            if b["type"] == "url" and re.fullmatch(r"https?://link/?", v):
+            if b["type"] == "url" and re.fullmatch(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?", v):
                 v = vals.get("link", v)
             b["value"] = v
             b["uid"] = db.new_uid()  # своё окно у каждого заполненного поста

@@ -51,7 +51,7 @@ def var_keys(d: dict) -> list[str]:
     """Что спросить у пользователя: ссылку (одна на все {link…}) и {1}..{9} по порядку."""
     blob = json.dumps([d.get("html"), d.get("buttons")], ensure_ascii=False)
     found = set(VAR_RE.findall(blob))
-    if re.search(r"https?://link/?[\"<]", blob):
+    if re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob):
         found.add("link")
     keys = ["link"] if any(k.startswith("link") for k in found) else []
     keys += sorted(k for k in found if k.isdigit())
