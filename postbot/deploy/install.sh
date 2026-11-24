@@ -7,6 +7,11 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"   # .../postbot
 SERVICE=postbot
 
 echo "==> Ставлю Python (если система сама обновляется — подожду до 15 минут)"
+for i in $(seq 1 180); do
+  pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null || break
+  [ "$i" = 1 ] && echo "   Жду, пока система закончит своё обновление…"
+  sleep 5
+done
 apt-get -o DPkg::Lock::Timeout=900 update -qq
 apt-get -o DPkg::Lock::Timeout=900 install -y -qq python3 python3-venv python3-pip >/dev/null
 
