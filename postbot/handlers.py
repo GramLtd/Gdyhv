@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 
 import db
-from render import (BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
+from render import (apply_vars, has_vars, parse_args, BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
                     send_post, switch_in_place)
 
 router = Router()
@@ -47,6 +47,7 @@ class S(StatesGroup):
     gift_to = State()
     timer_until = State()
     timer_done = State()
+    fill = State()
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
@@ -70,6 +71,7 @@ def panel_kb(d: dict) -> InlineKeyboardMarkup:
         [cb("🔗 Превью ссылок: " + ("выкл" if d["no_preview"] else "вкл"), "tp"),
          cb(("⬆️ Медиа/превью над текстом" if d["preview_above"] else "⬇️ Медиа/превью под текстом"),
             "ta")],
+        [cb("🔣 Переменные {link} {1}", "vh")],
         [cb("🧾 Текст как HTML-код", "hc"),
          cb("⏱ Таймер" + (" ✅" if d.get("timer") else ""), "tm")],
     ]
@@ -418,6 +420,8 @@ def normalize_url(v: str) -> str | None:
 
 def validate_value(t: str, v: str) -> tuple[str | None, str | None]:
     """Возвращает (значение, ошибка)."""
+    if t in ("url", "webapp") and "{" in v:
+        return v.strip(), None  # шаблонная ссылка: {link} подставится при заполнении
     if t == "url":
         u = normalize_url(v)
         return (u, None) if u else (None, "Нужна ссылка вида https://…, t.me/… или tg://…")
@@ -846,6 +850,7 @@ def tpl_menu(t: dict) -> InlineKeyboardMarkup:
            switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
                query=f"#{tid}", allow_user_chats=True, allow_bot_chats=True,
                allow_group_chats=True, allow_channel_chats=True))],
+        [cb("✍️ Заполнить переменные", f"tfl:{tid}")] if has_vars(t["data"]) else None,
         [cb("✏️ Переименовать", f"trn:{tid}"), cb("🗑 Удалить", f"tdl:{tid}")],
         [cb("⬅️ Шаблоны", "tl")],
     )
@@ -1042,20 +1047,104 @@ async def send_inline(c: CallbackQuery, state: FSMContext):
 async def inline_q(q: InlineQuery):
     uid = q.from_user.id
     s = q.query.strip()
-    if re.fullmatch(r"#\d+", s):
-        t = db.get_template(uid, int(s[1:]))
-        tpls = [t] if t else []
-    else:
-        tpls = db.find_templates(uid, s)
     results = []
-    for t in tpls:
+    # 1) «#id аргументы» или «название шаблона аргументы» — заполнение переменных
+    picked = []
+    m = re.match(r"#(\d+)\s*(.*)$", s, re.S)
+    if m:
+        t = db.get_template(uid, int(m.group(1)))
+        if t:
+            picked.append((t, m.group(2)))
+    else:
+        low = s.lower()
+        for t in db.find_templates(uid, "", 200):
+            name = t["name"].lower()
+            if low == name or low.startswith(name + " "):
+                picked.append((t, s[len(name):]))
+        picked.sort(key=lambda x: -len(x[0]["name"]))
+    for t, rest in picked[:10]:
+        vals = parse_args(rest) if rest.strip() else None
         try:
-            results.append(inline_result(t))
-        except Exception:  # noqa: BLE001 — битый шаблон не должен ломать выдачу
+            r = inline_result(t, vals, rid=f"{t['id']}-{abs(hash(rest)) % 10**9}")
+            if vals:
+                r.description = "✅ " + ", ".join(f"{{{k}}}={v[:20]}" for k, v in vals.items()
+                                                 if k in ("link_text",) or k.isdigit())[:120]
+            elif has_vars(t["data"]):
+                r.description = "Допиши через пробел: ссылку и значения {1} {2}…"
+            results.append(r)
+        except Exception:  # noqa: BLE001
             continue
-    await q.answer(results, cache_time=0, is_personal=True,
+    # 2) обычный поиск по названию
+    if not results:
+        for t in db.find_templates(uid, s):
+            try:
+                r = inline_result(t)
+                if has_vars(t["data"]):
+                    r.description = f"Шаблон с переменными: «{t['name']} ссылка 500 …»"
+                results.append(r)
+            except Exception:  # noqa: BLE001
+                continue
+    await q.answer(results[:50], cache_time=0, is_personal=True,
                    button=None if results else InlineQueryResultsButton(
                        text="Создать шаблон", start_parameter="new"))
+
+
+# ===================== переменные =====================
+
+VARS_HELP = """🔣 <b>Переменные в шаблоне</b>
+
+Пиши их в тексте, в тексте кнопок, в ссылках и во всплывающих окнах — при заполнении \
+они заменятся на значения:
+
+<code>{link}</code> — сама ссылка
+<code>{link_text}</code> — текст из ссылки, без неё: \
+<code>t.me/nft/PlushPepe-1234</code> → <b>Plush Pepe #1234</b>
+<code>{link_name}</code> — <b>Plush Pepe</b>
+<code>{link_num}</code> — <b>1234</b>
+<code>{link_slug}</code> — <b>PlushPepe-1234</b>
+<code>{1}</code>, <code>{2}</code> … <code>{9}</code> — значения по порядку
+
+🔗 <b>Слово-ссылка:</b> выдели слово → «Добавить ссылку» → <code>https://link</code>. \
+При заполнении туда встанет настоящая ссылка. Для кнопки-ссылки укажи <code>{link}</code>.
+
+💬 Окно кнопки: <code>Цена {link_text} — {1} ⭐</code> — цифры подтянутся те же, что в тексте.
+
+⚡ <b>Быстро через inline</b> в любом чате:
+<code>@{bot} название ссылка 500 текст</code>
+Если значение с пробелами — разделяй «|»:
+<code>@{bot} название ссылка | 500 | два слова</code>"""
+
+
+@router.callback_query(F.data == "vh")
+async def vars_help(c: CallbackQuery):
+    await c.answer()
+    me = await c.bot.me()
+    await c.message.edit_text(VARS_HELP.replace("{bot}", me.username), reply_markup=kb([BACK]))
+
+
+@router.callback_query(F.data.startswith("tfl:"))
+async def tpl_fill(c: CallbackQuery, state: FSMContext):
+    await state.set_state(S.fill)
+    await state.update_data(tid=int(c.data.split(":")[1]))
+    await c.answer()
+    await c.message.edit_text(
+        "✍️ Пришли значения: ссылку и значения для {1} {2}… через пробел "
+        "(или через «|», если внутри есть пробелы).\nПример: <code>https://t.me/nft/PlushPepe-1234 500</code>",
+        reply_markup=kb([cb("⬅️ Шаблоны", "tl")]))
+
+
+@router.message(S.fill, F.text)
+async def tpl_fill_in(m: Message, state: FSMContext):
+    t = db.get_template(m.from_user.id, (await state.get_data())["tid"])
+    await state.clear()
+    if not t:
+        await m.answer("Шаблон не найден.")
+        return
+    d = db.empty_draft()
+    d.update(apply_vars(t["data"], parse_args(m.text)))
+    db.save_draft(m.from_user.id, d)
+    await show_panel(m.bot, m.chat.id, m.from_user.id,
+                     "✅ Заполнено. Это новый черновик — отправляй или правь (шаблон не изменился).")
 
 
 # ===================== отправленные посты =====================

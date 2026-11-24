@@ -19,7 +19,11 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+import copy
 import html as _html
+import json
+import re
+from urllib.parse import unquote, urlsplit
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -37,6 +41,72 @@ def fmt_left(sec: int) -> str:
     h, rem = divmod(rem, 3600)
     m = rem // 60
     return (f"{d} д {h:02d}:{m:02d}" if d else f"{h:02d}:{m:02d}")
+
+
+VAR_RE = re.compile(r"\{(link|link_text|link_name|link_num|link_slug|[1-9])\}")
+LINK_RE = re.compile(r"^(https?://|t\.me/|tg://|@)\S+$", re.I)
+
+
+def link_vars(url: str) -> dict:
+    """Достаёт текст из ссылки: t.me/nft/PlushPepe-1234 → «Plush Pepe #1234»."""
+    u = url.strip()
+    if u.startswith("@"):
+        u = "https://t.me/" + u[1:]
+    elif not re.match(r"^[a-z]+://", u, re.I):
+        u = "https://" + u
+    path = urlsplit(u)
+    segs = [p for p in path.path.split("/") if p]
+    slug = unquote(segs[-1]) if segs else path.netloc
+    m = re.match(r"^(.*?)[-_ ]?(\d+)$", slug)
+    name, num = (m.group(1), m.group(2)) if m and m.group(1) else (slug, "")
+    name = re.sub(r"(?<=[a-zа-я])(?=[A-ZА-Я])", " ", name).replace("_", " ").replace("-", " ").strip()
+    return {"link": u, "link_slug": slug, "link_name": name, "link_num": num,
+            "link_text": f"{name} #{num}" if num and name else (name or num)}
+
+
+def parse_args(rest: str) -> dict:
+    """«https://t.me/nft/X-1 500 текст» или «ссылка | 500 | длинный текст» → переменные."""
+    rest = rest.strip()
+    parts = [p.strip() for p in rest.split("|")] if "|" in rest else rest.split()
+    vals, pos = {}, []
+    for p in parts:
+        if "link" not in vals and LINK_RE.match(p):
+            vals.update(link_vars(p))
+        elif p:
+            pos.append(p)
+    for i, p in enumerate(pos[:9], 1):
+        vals[str(i)] = p
+    return vals
+
+
+def has_vars(d: dict) -> bool:
+    blob = json.dumps([d.get("html"), d.get("buttons")], ensure_ascii=False)
+    return bool(VAR_RE.search(blob) or re.search(r"https?://link/?[\"<]", blob))
+
+
+def apply_vars(d: dict, vals: dict) -> dict:
+    """Копия поста с подставленными значениями (в тексте — экранированными)."""
+    def sub(text: str, esc: bool) -> str:
+        if not text:
+            return text
+        if esc:  # ссылка-заглушка https://link в тексте → настоящая ссылка
+            text = re.sub(r'href="https?://link/?"',
+                          lambda _: 'href="%s"' % _html.escape(vals.get("link", ""), quote=True), text)
+        return VAR_RE.sub(lambda m: (_html.escape(vals[m.group(1)]) if esc else vals[m.group(1)])
+                          if m.group(1) in vals else m.group(0), text)
+    out = copy.deepcopy(d)
+    out["html"] = sub(out.get("html") or "", True)
+    for row in out.get("buttons") or []:
+        for b in row:
+            b["text"] = sub(b["text"], False)[:64] or "•"
+            if b["type"] in ("stars", "gift", "page"):
+                continue
+            v = sub(b.get("value") or "", False)
+            if b["type"] == "url" and re.fullmatch(r"https?://link/?", v):
+                v = vals.get("link", v)
+            b["value"] = v
+            b["uid"] = db.new_uid()  # своё окно у каждого заполненного поста
+    return out
 
 
 def render_text(d: dict) -> str:
@@ -116,6 +186,8 @@ def build_button(b: dict) -> InlineKeyboardButton:
     if b.get("icon"):
         kw["icon_custom_emoji_id"] = b["icon"]
     t, v = b["type"], b.get("value") or ""
+    if t in ("url", "webapp") and "{" in v:  # переменная ещё не заполнена
+        v = "https://t.me/"
     if t == "url":
         kw["url"] = v
     elif t == "webapp":
@@ -208,8 +280,11 @@ async def edit_post(bot: Bot, chat_id: int, message_id: int, old: dict, d: dict)
                                        link_preview_options=preview_opts(d))
 
 
-def inline_result(tpl: dict):
-    d, rid, title = tpl["data"], str(tpl["id"]), tpl["name"]
+def inline_result(tpl: dict, vals: dict | None = None, rid: str | None = None):
+    d, title = tpl["data"], tpl["name"]
+    rid = rid or str(tpl["id"])
+    if vals:
+        d = apply_vars(d, vals)
     markup = build_markup(d)
     text = render_text(d)
     m = d.get("media")
