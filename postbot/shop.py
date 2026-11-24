@@ -70,6 +70,7 @@ MENU_TEXTS = {
     "locked": ("Под закрытым шаблоном", "🔒 Доступ навсегда — {price} ⭐"),
     "buy_btn": ("Кнопка покупки", "💰 Купить за {price} ⭐"),
     "bought": ("После покупки", "✅ Шаблон «{title}» твой навсегда."),
+    "redirect": ("Основной бот → магазин", "🛍 Шаблоны постов и доступ к ним — в нашем боте-магазине."),
 }
 
 
@@ -142,6 +143,14 @@ async def user_home(bot: Bot, chat_id: int, uid: int, msg: Message | None = None
         except TelegramBadRequest:
             pass
     await bot.send_message(chat_id, text, reply_markup=kb(*rows))
+
+
+async def shop_redirect(m: Message):
+    """Основной бот, когда есть отдельный бот-магазин: обычных пользователей отправляем туда."""
+    name = access.SHOP_BOT["username"]
+    arg = (m.text or "").partition(" ")[2].strip()
+    link = f"https://t.me/{name}" + (f"?start={arg}" if arg.startswith(("t_", "shop")) else "")
+    await m.answer(mtext("redirect"), reply_markup=kb([B(text="🛍 Открыть магазин шаблонов", url=link)]))
 
 
 @router.message(CommandStart(deep_link=True))
@@ -288,7 +297,7 @@ async def finish_fill(bot: Bot, chat_id: int, uid: int, state: FSMContext):
         await bot.send_message(chat_id, f"❌ Telegram не принял пост: <code>{html.escape(e.message)}</code>")
         return
     # запоминаем, чтобы бот сам обновлял живой таймер в этом сообщении
-    db.add_sent(uid, chat_id, "Чат с ботом", sent.message_id, started)
+    db.add_sent(uid, chat_id, "Чат с ботом", sent.message_id, started, bot.id)
     args = " | ".join([data["vals"].get("link", "")] +
                       [data["vals"][k] for k in data["keys"] if k.isdigit()]).strip(" |")
     rows = [
@@ -328,13 +337,13 @@ def admin_only(c_or_m) -> bool:
 
 async def admin_home(bot: Bot, chat_id: int, msg: Message | None = None):
     st = db.stats()
-    me = await bot.me()
+    shop_name = access.SHOP_BOT["username"] or (await bot.me()).username
     text = (
         "👑 <b>Админка</b>\n\n"
         f"👥 Пользователей: {st['users']}\n"
         f"🛍 Покупок шаблонов: {st['purchases']}\n💰 Всего получено: {st['stars']} ⭐\n\n"
         "Редактор постов доступен только админам; пользователи покупают доступ к шаблонам.\n"
-        f"Ссылка на магазин: <code>https://t.me/{me.username}?start=shop</code>")
+        f"Ссылка на магазин: <code>https://t.me/{shop_name}?start=shop</code>")
     rows = [
         [cb("🛍 Шаблоны для пользователей", "a:tl")],
         [cb("📝 Тексты меню", "a:mt")],
@@ -477,7 +486,7 @@ async def admin_tpl(bot: Bot, msg: Message | None, tid: int, chat_id: int | None
         r = {"tid": tid, "title": t["name"], "descr": "", "access": "free", "price": 0,
              "prompts": {}, "published": 0}
         db.shop_save(r)
-    me = await bot.me()
+    shop_name = access.SHOP_BOT["username"] or (await bot.me()).username
     keys = var_keys(t["data"])
     qs = "\n".join(f"  <code>{{{k}}}</code> → {html.escape(r['prompts'].get(k) or default_prompt(k))}"
                    for k in keys) or "  (переменных нет — пользователь сразу получит пост)"
@@ -485,7 +494,7 @@ async def admin_tpl(bot: Bot, msg: Message | None, tid: int, chat_id: int | None
             f"{html.escape(r['descr']) or '<i>без описания</i>'}\n\n"
             f"<b>Статус:</b> {'🟢 опубликован' if r['published'] else '⚪ скрыт'}\n"
             f"<b>Доступ:</b> {access_label(r)}\n<b>Вопросы пользователю:</b>\n{qs}\n\n"
-            f"Прямая ссылка на меню шаблона:\n<code>https://t.me/{me.username}?start=t_{tid}</code>")
+            f"Прямая ссылка на меню шаблона:\n<code>https://t.me/{shop_name}?start=t_{tid}</code>")
     rows = [
         [cb("⚪ Скрыть" if r["published"] else "🟢 Опубликовать", f"a:pub:{tid}")],
         [cb(f"Доступ: {access_label(r)}", f"a:acc:{tid}")],

@@ -988,7 +988,7 @@ async def deliver(bot: Bot, user_id: int, chat_id, reply_to: Message, state: FSM
         return
     await state.clear()
     title = chat.title or chat.full_name or str(chat.id)
-    db.add_sent(user_id, chat.id, title, sent.message_id, d)
+    db.add_sent(user_id, chat.id, title, sent.message_id, d, bot.id)
     link = post_link(chat, sent.message_id)
     rows = [[B(text="🔗 Открыть пост", url=link)]] if link else []
     if access.has_editor(user_id):
@@ -1098,7 +1098,8 @@ async def inline_q(q: InlineQuery):
                 continue
     await q.answer(results[:50], cache_time=0, is_personal=True,
                    button=None if results else InlineQueryResultsButton(
-                       text="Создать шаблон", start_parameter="new"))
+                       text="🛍 Магазин шаблонов" if access.SHOP_MODE.get() else "Создать шаблон",
+                       start_parameter="shop" if access.SHOP_MODE.get() else "new"))
 
 
 # ===================== переменные =====================

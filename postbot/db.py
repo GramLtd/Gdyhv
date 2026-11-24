@@ -53,6 +53,10 @@ def conn() -> sqlite3.Connection:
             );
             """
         )
+        cols = {r[1] for r in _conn.execute("PRAGMA table_info(sent)")}
+        if "bot_id" not in cols:  # каким ботом отправлен пост — только он может его менять
+            _conn.execute("ALTER TABLE sent ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0")
+            _conn.commit()
     return _conn
 
 
@@ -152,11 +156,13 @@ def delete_template(user_id: int, tid: int) -> None:
 
 # ---------- отправленные ----------
 
-def add_sent(user_id: int, chat_id: int, title: str, message_id: int, d: dict) -> int:
+def add_sent(user_id: int, chat_id: int, title: str, message_id: int, d: dict,
+             bot_id: int = 0) -> int:
     cur = conn().execute(
-        "INSERT INTO sent(user_id, chat_id, chat_title, message_id, data, created) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO sent(user_id, chat_id, chat_title, message_id, data, created, bot_id) "
+        "VALUES(?,?,?,?,?,?,?)",
         (user_id, chat_id, title, message_id, json.dumps(post_part(d), ensure_ascii=False),
-         int(time.time())),
+         int(time.time()), bot_id),
     )
     conn().commit()
     return cur.lastrowid

@@ -1,11 +1,20 @@
 """Кто что может: владелец (ADMIN_IDS), подписчик редактора, обычный пользователь."""
 import time
+from contextvars import ContextVar
 
 import db
 from config import ADMIN_IDS
 
 
+# True, пока обрабатывается апдейт бота-магазина: там все, включая админов, — обычные покупатели
+SHOP_MODE: ContextVar[bool] = ContextVar("SHOP_MODE", default=False)
+# username бота-магазина (если он запущен) — основной бот отправляет туда пользователей
+SHOP_BOT = {"username": ""}
+
+
 def is_admin(uid: int) -> bool:
+    if SHOP_MODE.get():
+        return False
     return not ADMIN_IDS or uid in ADMIN_IDS
 
 
