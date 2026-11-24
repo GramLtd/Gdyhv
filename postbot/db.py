@@ -36,6 +36,16 @@ def conn() -> sqlite3.Connection:
                 data TEXT NOT NULL,
                 created INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS payments (
+                uid TEXT PRIMARY KEY,
+                owner_id INTEGER NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS paid (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uid TEXT, payer_id INTEGER, amount INTEGER, charge_id TEXT,
+                status TEXT, created INTEGER
+            );
             CREATE TABLE IF NOT EXISTS popups (
                 uid TEXT PRIMARY KEY,
                 text TEXT NOT NULL,
@@ -187,3 +197,26 @@ def put_popup(uid: str, text: str, alert: bool) -> None:
 
 def get_popup(uid: str):
     return conn().execute("SELECT text, alert FROM popups WHERE uid=?", (uid,)).fetchone()
+
+
+# ---- платные кнопки (звёзды / подарки) ----
+
+def put_payment(uid: str, owner_id: int, data: dict) -> None:
+    conn().execute(
+        "INSERT INTO payments(uid, owner_id, data) VALUES(?,?,?) "
+        "ON CONFLICT(uid) DO UPDATE SET data=excluded.data",
+        (uid, owner_id, json.dumps(data, ensure_ascii=False)))
+    conn().commit()
+
+
+def get_payment(uid: str):
+    row = conn().execute("SELECT owner_id, data FROM payments WHERE uid=?", (uid,)).fetchone()
+    if not row:
+        return None
+    return {"owner_id": row["owner_id"], **json.loads(row["data"])}
+
+
+def log_paid(uid: str, payer_id: int, amount: int, charge_id: str, status: str) -> None:
+    conn().execute("INSERT INTO paid(uid, payer_id, amount, charge_id, status, created) "
+                   "VALUES(?,?,?,?,?,?)", (uid, payer_id, amount, charge_id, status, int(time.time())))
+    conn().commit()

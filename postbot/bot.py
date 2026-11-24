@@ -16,7 +16,8 @@ class AccessMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if ADMIN_IDS:
             user = getattr(event, "from_user", None)
-            is_popup = isinstance(event, CallbackQuery) and (event.data or "").startswith("pp:")
+            is_popup = (isinstance(event, CallbackQuery) and (event.data or "").startswith("pp:")) \
+                or (isinstance(event, Message) and event.successful_payment is not None)
             if not is_popup and (user is None or user.id not in ADMIN_IDS):
                 if isinstance(event, Message) and event.chat.type == "private":
                     await event.answer("⛔ Нет доступа.")

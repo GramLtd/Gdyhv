@@ -14,6 +14,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineQuery,
     InlineQueryResultsButton,
+    LabeledPrice,
+    PreCheckoutQuery,
     Message,
     SwitchInlineQueryChosenChat,
 )
@@ -41,6 +43,7 @@ class S(StatesGroup):
     tpl_rename = State()
     target = State()
     emoji = State()
+    gift_to = State()
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
@@ -423,6 +426,12 @@ def validate_value(t: str, v: str) -> tuple[str | None, str | None]:
         return (v, None) if len(v) <= 200 else (None, f"Максимум 200 символов, у тебя {len(v)}.")
     if t == "copy":
         return (v, None) if len(v) <= 256 else (None, f"Максимум 256 символов, у тебя {len(v)}.")
+    if t == "stars":
+        amount, _, desc = v.partition("|")
+        amount = amount.strip()
+        if not amount.isdigit() or not 1 <= int(amount) <= 10000:
+            return None, "Нужно число звёзд от 1 до 10000."
+        return f"{int(amount)}|{desc.strip()[:255]}", None
     if t in ("inline", "inline_here", "inline_pick"):
         return ("" if v.strip() == "-" else v), None
     return v, None
@@ -444,6 +453,9 @@ async def btn_text_in(m: Message, state: FSMContext):
         await state.set_state(S.btn_value)
         await m.answer(f"Теперь отправь: <b>{hint}</b>\nШаблон: <code>{html.escape(pattern)}</code>",
                        reply_markup=kb([BACK]))
+        return
+    if data["type"] == "gift":
+        await gift_picker(m.bot, m.chat.id, state)
         return
     await state.set_state(S.btn_value)
     await m.answer(BUTTON_TYPES[data["type"]][1], reply_markup=kb([BACK]))
@@ -472,6 +484,15 @@ async def finish_button(m: Message, state: FSMContext, raw_value: str):
     uid = m.from_user.id
     d = db.get_draft(uid)
     edit = data.get("edit")
+    extra = {}
+    if t in ("stars", "gift"):
+        try:
+            extra["link"], value = await make_invoice(m.bot, uid, t, value, data)
+        except TelegramBadRequest as e:
+            await state.clear()
+            await m.answer(f"❌ Telegram не создал счёт: <code>{html.escape(e.message)}</code>",
+                           reply_markup=kb([BACK]))
+            return
     if edit:  # смена действия у существующей кнопки
         r, i = edit
         try:
@@ -480,12 +501,12 @@ async def finish_button(m: Message, state: FSMContext, raw_value: str):
             await state.clear()
             await m.answer("Кнопка не найдена.")
             return
-        b.update(type=t, value=value)
+        b.update(type=t, value=value, **extra)
         if data.get("text"):
             b["text"] = data["text"]
     else:
         d["buttons"].append([{"uid": db.new_uid(), "text": data["text"], "type": t,
-                              "value": value, "style": None, "icon": None}])
+                              "value": value, "style": None, "icon": None, **extra}])
         r, i = len(d["buttons"]) - 1, 0
     db.save_draft(uid, d)
     await state.clear()
@@ -500,6 +521,8 @@ def btn_info(d: dict, r: int, i: int) -> str:
     b = d["buttons"][r][i]
     label = BUTTON_TYPES.get(b["type"], ("?",))[0]
     val = b.get("value") or "—"
+    if b["type"] == "stars":
+        val = "⭐ " + val.replace("|", " — ").rstrip(" —")
     return (f"\n<b>Кнопка:</b> {html.escape(b['text'])}\n"
             f"<b>Тип:</b> {label}\n<b>Значение:</b> <code>{html.escape(val)}</code>\n"
             f"<b>Цвет:</b> {STYLES.get(b.get('style'))}\n"
@@ -646,8 +669,12 @@ async def btn_change_type(c: CallbackQuery, state: FSMContext):
         rows.append([BACK])
         await c.message.edit_text("📚 Выбери раздел Telegram:", reply_markup=kb(*rows))
         return
-    await state.set_state(S.btn_value)
     await state.update_data(type=t, preset=None, text=None)
+    if t == "gift":
+        await c.message.delete()
+        await gift_picker(c.bot, c.message.chat.id, state)
+        return
+    await state.set_state(S.btn_value)
     await c.message.edit_text(BUTTON_TYPES[t][1], reply_markup=kb([BACK]))
 
 
@@ -1166,6 +1193,155 @@ async def popup(c: CallbackQuery):
     await c.answer(p["text"], show_alert=bool(p["alert"]))
 
 
+# ===================== звёзды и подарки =====================
+
+async def make_invoice(bot: Bot, owner: int, t: str, value: str, data: dict):
+    """Создаёт ссылку на оплату в Stars. Возвращает (ссылка, значение для показа)."""
+    pid = db.new_uid()
+    if t == "stars":
+        amount, _, desc = value.partition("|")
+        amount = int(amount)
+        title = data.get("text") or "Поддержка"
+        info = {"kind": "stars", "amount": amount}
+        shown = value
+        description = desc or f"Оплата {amount} ⭐"
+    else:
+        amount = data["gift_stars"]
+        info = {"kind": "gift", "amount": amount, "gift_id": data["gift_id"],
+                "to": data["gift_to"], "to_title": data["gift_to_title"],
+                "note": data.get("gift_note") or ""}
+        title = data.get("text") or "Подарок"
+        shown = f"{data['gift_emoji']} за {amount} ⭐ → {data['gift_to_title']}"
+        description = f"Подарок {data['gift_emoji']} для {data['gift_to_title']}"
+    title = re.sub(r"\s+", " ", title)[:32] or "Оплата"
+    link = await bot.create_invoice_link(
+        title=title, description=description[:255], payload=f"pay:{pid}",
+        currency="XTR", prices=[LabeledPrice(label=title, amount=amount)])
+    db.put_payment(pid, owner, info)
+    return link, shown
+
+
+async def gift_picker(bot: Bot, chat_id: int, state: FSMContext):
+    try:
+        gifts = (await bot.get_available_gifts()).gifts
+    except TelegramBadRequest as e:
+        await state.clear()
+        await bot.send_message(chat_id, f"❌ Не удалось получить список подарков: {e.message}",
+                               reply_markup=kb([BACK]))
+        return
+    gifts = [g for g in gifts if g.remaining_count is None or g.remaining_count > 0][:60]
+    cache = {g.id: [g.sticker.emoji or "🎁", g.star_count] for g in gifts}
+    await state.update_data(gift_cache=cache)
+    rows, row = [], []
+    for g in gifts:
+        mark = "🔥" if g.total_count else ""
+        row.append(cb(f"{g.sticker.emoji or '🎁'} {g.star_count}⭐{mark}", f"gp:{g.id}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([BACK])
+    await bot.send_message(
+        chat_id, "🎁 <b>Выбери подарок</b>\nЧеловек, нажавший кнопку, оплатит его звёздами, "
+        "а бот сразу отправит этот подарок получателю.\n🔥 — лимитированный.",
+        reply_markup=kb(*rows))
+
+
+@router.callback_query(F.data.startswith("gp:"))
+async def gift_pick(c: CallbackQuery, state: FSMContext):
+    gid = c.data[3:]
+    data = await state.get_data()
+    g = (data.get("gift_cache") or {}).get(gid)
+    if not g:
+        await c.answer("Начни заново", show_alert=True)
+        return
+    await state.update_data(gift_id=gid, gift_emoji=g[0], gift_stars=g[1])
+    await state.set_state(S.gift_to)
+    await c.answer()
+    await c.message.edit_text(
+        f"Подарок {g[0]} за {g[1]} ⭐\n\n<b>Кому бот отправит подарок?</b>\n"
+        "• «-» — тебе\n• @username канала или его ID — каналу\n"
+        "• ID пользователя — ему (он должен был хоть раз написать боту)\n\n"
+        "Можно добавить подпись к подарку через «|»: <code>- | Спасибо за поддержку!</code>",
+        reply_markup=kb([BACK]))
+
+
+@router.message(S.gift_to, F.text)
+async def gift_to_in(m: Message, state: FSMContext):
+    who, _, note = m.text.partition("|")
+    who = who.strip()
+    if who in ("-", ""):
+        to, title = {"user_id": m.from_user.id}, "автору поста"
+    elif re.fullmatch(r"\d+", who):
+        to, title = {"user_id": int(who)}, f"пользователю {who}"
+    elif re.fullmatch(r"-\d+|@?\w{4,}", who):
+        try:
+            chat = await m.bot.get_chat(int(who) if who.lstrip("-").isdigit() else "@" + who.lstrip("@"))
+        except TelegramBadRequest as e:
+            await m.answer(f"❌ Не нашёл чат: {e.message}. Попробуй ещё раз.")
+            return
+        if chat.type == "private":
+            to, title = {"user_id": chat.id}, chat.full_name
+        else:
+            to, title = {"chat_id": chat.id}, chat.title or str(chat.id)
+    else:
+        await m.answer("Не понял получателя. «-», @канал, ID канала или ID пользователя.")
+        return
+    await state.update_data(gift_to=to, gift_to_title=title, gift_note=note.strip()[:128])
+    await finish_button(m, state, "gift")
+
+
+@router.pre_checkout_query()
+async def pre_checkout(q: PreCheckoutQuery):
+    pid = q.invoice_payload.removeprefix("pay:")
+    p = db.get_payment(pid)
+    if not p or p["amount"] != q.total_amount:
+        await q.answer(ok=False, error_message="Эта кнопка больше не активна.")
+        return
+    await q.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def paid(m: Message):
+    sp = m.successful_payment
+    pid = sp.invoice_payload.removeprefix("pay:")
+    p = db.get_payment(pid)
+    payer = m.from_user
+    who = html.escape(payer.full_name) + (f" (@{payer.username})" if payer.username else "")
+    if not p:
+        db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "unknown")
+        await m.answer("Спасибо! Оплата получена.")
+        return
+    if p["kind"] == "stars":
+        db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "ok")
+        await m.answer(f"💛 Спасибо! Получено {sp.total_amount} ⭐")
+        await notify(m.bot, p["owner_id"], f"⭐ {who} отправил(а) {sp.total_amount} звёзд.")
+        return
+    try:
+        await m.bot.send_gift(gift_id=p["gift_id"], text=p.get("note") or None, **p["to"])
+    except TelegramBadRequest as e:
+        db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "refunded")
+        try:
+            await m.bot.refund_star_payment(payer.id, sp.telegram_payment_charge_id)
+            await m.answer("😔 Не получилось отправить подарок — звёзды возвращены.")
+        except TelegramBadRequest:
+            await m.answer("😔 Не получилось отправить подарок. Свяжитесь с автором поста.")
+        await notify(m.bot, p["owner_id"], f"❗ {who} оплатил(а) подарок, но отправить его не "
+                     f"удалось: <code>{html.escape(e.message)}</code>")
+        return
+    db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "ok")
+    await m.answer(f"🎁 Готово! Подарок отправлен: {html.escape(p['to_title'])}.")
+    await notify(m.bot, p["owner_id"], f"🎁 {who} купил(а) подарок → {html.escape(p['to_title'])}.")
+
+
+async def notify(bot: Bot, uid: int, text: str):
+    try:
+        await bot.send_message(uid, text)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+
+
 # ===================== сообщение без команды = контент поста =====================
 
 @router.message(F.chat.type == "private", MEDIA_FILTER)
@@ -1181,3 +1357,5 @@ async def any_text(m: Message, state: FSMContext):
         d["buttons"] = imported
         db.save_draft(m.from_user.id, d)
     await apply_text(m, message_html(m), state)
+
+
