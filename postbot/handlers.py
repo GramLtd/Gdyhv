@@ -1550,10 +1550,12 @@ async def page_press(c: CallbackQuery):
     parts = c.data.split(":")
     t = db.get_template_any(int(parts[1]))
     pop = db.get_popup(parts[2]) if len(parts) > 2 else None
+    vals = db.get_page_vals(parts[2]) if len(parts) > 2 else {}
     if not t:
         await c.answer("Эта кнопка больше не работает", show_alert=True)
         return
-    d = start_timer(t["data"])
+    # переменные (ссылки, цифры) предыдущего экрана переходят в новый — по всей цепочке
+    d = start_timer(apply_vars(t["data"], vals) if vals else t["data"])
     for row in d.get("buttons") or []:  # окна/подарки нового экрана должны работать
         for b in row:
             b.setdefault("uid", db.new_uid())

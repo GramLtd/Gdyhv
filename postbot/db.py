@@ -202,6 +202,20 @@ def put_popup(uid: str, text: str, alert: bool) -> None:
     conn().commit()
 
 
+def put_page_vals(uid: str, vals: dict) -> None:
+    """Значения переменных поста — чтобы следующий экран цепочки «сменить пост» их унаследовал."""
+    conn().execute("CREATE TABLE IF NOT EXISTS page_vals (uid TEXT PRIMARY KEY, data TEXT NOT NULL)")
+    conn().execute("INSERT OR REPLACE INTO page_vals(uid, data) VALUES(?,?)",
+                   (uid, json.dumps(vals, ensure_ascii=False)))
+    conn().commit()
+
+
+def get_page_vals(uid: str) -> dict:
+    conn().execute("CREATE TABLE IF NOT EXISTS page_vals (uid TEXT PRIMARY KEY, data TEXT NOT NULL)")
+    row = conn().execute("SELECT data FROM page_vals WHERE uid=?", (uid,)).fetchone()
+    return json.loads(row["data"]) if row else {}
+
+
 def get_popup(uid: str):
     return conn().execute("SELECT text, alert FROM popups WHERE uid=?", (uid,)).fetchone()
 

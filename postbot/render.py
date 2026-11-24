@@ -132,6 +132,9 @@ def apply_vars(d: dict, vals: dict) -> dict:
                 b["popup"] = {**b["popup"], "text": sub(b["popup"]["text"], False)[:200]}
             if b["type"] in ("stars", "gift", "page"):
                 b["uid"] = db.new_uid()
+                if b["type"] == "page" and vals:
+                    db.put_page_vals(b["uid"], vals)  # следующий экран получит те же ссылки и цифры
+                    b["vals"] = True
                 continue
             v = sub(b.get("value") or "", False)
             if b["type"] == "url" and re.fullmatch(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?", v):
@@ -240,9 +243,11 @@ def build_button(b: dict) -> InlineKeyboardButton:
         kw["callback_data"] = f"pp:{b['uid']}"
     elif t == "page":
         pop = b.get("popup")
-        if pop and pop.get("text"):  # окно/уведомление + смена поста одной кнопкой
+        has_pop = bool(pop and pop.get("text"))
+        if has_pop or b.get("vals"):  # окно и/или переменные, которые передаются дальше
             uid = b.setdefault("uid", db.new_uid())
-            db.put_popup(uid, pop["text"], bool(pop.get("alert")))
+            if has_pop:
+                db.put_popup(uid, pop["text"], bool(pop.get("alert")))
             kw["callback_data"] = f"pg:{v}:{uid}"
         else:
             kw["callback_data"] = f"pg:{v}"
