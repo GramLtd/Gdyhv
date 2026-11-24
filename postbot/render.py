@@ -37,6 +37,7 @@ TZ = ZoneInfo(TZ_NAME)
 def fmt_left(sec: int) -> str:
     if sec <= 0:
         return "0:00"
+    sec = (sec + 59) // 60 * 60  # округляем вверх до минуты
     d, rem = divmod(sec, 86400)
     h, rem = divmod(rem, 3600)
     m = rem // 60
@@ -109,9 +110,20 @@ def apply_vars(d: dict, vals: dict) -> dict:
     return out
 
 
+def start_timer(d: dict) -> dict:
+    """Таймер «от момента отправки»: превращает длительность в конкретное время окончания.
+    Вызывается в момент отправки — у каждого поста свой отсчёт."""
+    t = d.get("timer")
+    if t and t.get("duration") and not t.get("until"):
+        d = {**d, "timer": {**t, "until": int(time.time()) + int(t["duration"]), "finished": False}}
+        d["timer"].pop("duration", None)
+    return d
+
+
 def render_text(d: dict) -> str:
     """Подставляет таймер вместо {timer}."""
     text = d.get("html") or ""
+    d = start_timer(d)  # превью/inline: отсчёт как будто с этой секунды
     t = d.get("timer")
     if not t or "{timer}" not in text:
         return text

@@ -24,7 +24,7 @@ from aiogram.types import (
 import access
 import db
 from render import (apply_vars, has_vars, parse_args, BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
-                    send_post, switch_in_place)
+                    send_post, start_timer, switch_in_place)
 
 router = Router()
 
@@ -980,6 +980,7 @@ async def deliver(bot: Bot, user_id: int, chat_id, reply_to: Message, state: FSM
             if member.status not in ("creator", "administrator"):
                 await reply_to.answer("❌ Ты не администратор этого чата.")
                 return
+        d = start_timer(d)  # таймер «от отправки» стартует здесь, у каждого поста свой
         sent = await send_post(bot, chat.id, d)
     except (TelegramBadRequest, TelegramForbiddenError) as e:
         await reply_to.answer(f"❌ Не удалось отправить:\n<code>{html.escape(e.message)}</code>\n\n"
@@ -1500,7 +1501,7 @@ async def page_press(c: CallbackQuery):
     if not t:
         await c.answer("Эта кнопка больше не работает", show_alert=True)
         return
-    d = t["data"]
+    d = start_timer(t["data"])
     for row in d.get("buttons") or []:  # окна/подарки нового экрана должны работать
         for b in row:
             b.setdefault("uid", db.new_uid())
@@ -1531,7 +1532,14 @@ def timer_text(d: dict) -> str:
          "(сюда, в канал, в группу), не через inline.\n"
          "• <b>Telegram</b> — Telegram сам показывает «через 3 часа» по-русски у каждого "
          "зрителя, бот пост не трогает. Работает везде.\n\n")
-    if t:
+    if t and t.get("duration"):
+        s += (f"<b>Длительность:</b> {fmt_left(t['duration'])} — ⏳ отсчёт стартует отдельно "
+              "для каждого поста с момента его отправки\n"
+              f"<b>Режим:</b> {'живой' if t['mode'] == 'live' else 'Telegram'}\n"
+              f"<b>По окончании:</b> {html.escape(t.get('done') or 'время вышло')}")
+        if "{timer}" not in (d.get("html") or ""):
+            s += "\n\n⚠️ В тексте нет <code>{timer}</code> — таймер не виден."
+    elif t:
         when = datetime.fromtimestamp(t["until"], TZ).strftime("%d.%m.%Y %H:%M")
         left = int(t["until"] - time.time())
         s += (f"<b>До:</b> {when} ({TZ.key})\n<b>Осталось:</b> {fmt_left(left)}\n"
@@ -1546,7 +1554,8 @@ def timer_text(d: dict) -> str:
 
 def timer_kb(d: dict) -> InlineKeyboardMarkup:
     t = d.get("timer")
-    rows = [[cb("🕐 Задать время окончания", "tmu")]]
+    rows = [[cb("🕐 Точное время окончания", "tmu")],
+            [cb("⏳ Длительность от отправки поста", "tmr")]]
     if t:
         rows.append([cb("Режим: " + ("🔁 живой" if t["mode"] == "live" else "📅 Telegram"), "tmm"),
                      cb("🏁 Текст по окончании", "tmd")])
@@ -1602,8 +1611,40 @@ def parse_until(text: str) -> int | None:
     return None
 
 
+@router.callback_query(F.data == "tmr")
+async def timer_rel(c: CallbackQuery, state: FSMContext):
+    await state.set_state(S.timer_until)
+    await state.update_data(relative=True)
+    await c.answer()
+    await c.message.edit_text(
+        "⏳ Сколько будет идти таймер <b>с момента отправки</b> каждого поста?\n\n"
+        "Примеры: <code>2ч</code>, <code>30м</code>, <code>1д 12ч</code>, <code>45м</code>\n\n"
+        "Сохрани пост шаблоном — и каждый отправленный по нему пост (сюда, в канал, "
+        "через inline, из магазина) получит свой отсчёт.",
+        reply_markup=kb([cb("⬅️ Таймер", "tm")]))
+
+
 @router.message(S.timer_until, F.text)
 async def timer_until_in(m: Message, state: FSMContext):
+    if (await state.get_data()).get("relative"):
+        txt = m.text.strip()
+        until = parse_until(txt if txt.startswith("+") else "+" + txt)
+        if not until:
+            await m.answer("Не понял. Пример: <code>2ч</code>, <code>30м</code>, <code>1д 12ч</code>")
+            return
+        d = db.get_draft(m.from_user.id)
+        t = d.get("timer") or {"mode": "live", "done": "⏰ Время вышло!"}
+        t.pop("until", None)
+        t.update(duration=until - int(time.time()), finished=False)
+        d["timer"] = t
+        note = ""
+        if "{timer}" not in (d.get("html") or ""):
+            d["html"] = (d.get("html") or "") + "\n\n⏱ До конца: {timer}"
+            note = "Добавил в конец текста строку «⏱ До конца: {timer}» — перенеси куда хочешь.\n\n"
+        db.save_draft(m.from_user.id, d)
+        await state.clear()
+        await m.answer("✅ " + note + timer_text(d), reply_markup=timer_kb(d))
+        return
     until = parse_until(m.text)
     if not until or until <= time.time():
         await m.answer("Не понял время (или оно уже прошло). Пример: <code>31.12.2026 23:59</code> "
@@ -1611,6 +1652,7 @@ async def timer_until_in(m: Message, state: FSMContext):
         return
     d = db.get_draft(m.from_user.id)
     t = d.get("timer") or {"mode": "live", "done": "⏰ Время вышло!"}
+    t.pop("duration", None)
     t.update(until=until, finished=False)
     d["timer"] = t
     note = ""
