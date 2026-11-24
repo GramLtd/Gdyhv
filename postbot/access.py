@@ -10,7 +10,8 @@ def is_admin(uid: int) -> bool:
 
 
 def paywall_on() -> bool:
-    return bool(ADMIN_IDS) and db.get_setting("pay_on", "0") == "1"
+    """Подписка на редактор убрана: обычные пользователи только покупают доступ к шаблонам."""
+    return False
 
 
 def sub_active(uid: int) -> bool:
@@ -18,8 +19,8 @@ def sub_active(uid: int) -> bool:
 
 
 def has_editor(uid: int) -> bool:
-    """Полный редактор: владельцу всегда, остальным — по активной подписке."""
-    return is_admin(uid) or sub_active(uid)
+    """Редактор и создание постов — только админам."""
+    return is_admin(uid)
 
 
 def can_use(uid: int, tid: int) -> bool:
@@ -34,7 +35,7 @@ def can_use(uid: int, tid: int) -> bool:
     if r["access"] == "free":
         return True
     if r["access"] == "sub":
-        return sub_active(uid)
+        return False  # устаревший тип доступа: открыт только админу
     return db.has_purchase(uid, tid) or (r["access"] == "price" and r["price"] == 0)
 
 

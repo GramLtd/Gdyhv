@@ -37,7 +37,7 @@ async def timer_loop(bot: Bot):
 
 
 class AccessMiddleware(BaseMiddleware):
-    """Редактор — владельцу и подписчикам. Остальным: меню шаблонов, окна, оплата."""
+    """Редактор — только админам. Остальным: меню шаблонов, окна, оплата."""
 
     async def __call__(self, handler, event, data):
         user = getattr(event, "from_user", None)
@@ -48,7 +48,7 @@ class AccessMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             if (event.data or "").startswith(("pp:", "pg:", "u:")):
                 return await handler(event, data)
-            await event.answer("🔒 Нужен доступ к редактору — /menu", show_alert=True)
+            await event.answer("🔒 Редактор доступен только админам — /menu", show_alert=True)
             return None
         if isinstance(event, Message):
             if event.successful_payment or event.chat.type != "private":

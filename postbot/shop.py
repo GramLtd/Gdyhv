@@ -16,7 +16,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton as B, InlineKeybo
 import access
 import db
 from config import ADMIN_IDS
-from render import TZ, VAR_RE, apply_vars, link_vars, send_post
+from render import TZ, VAR_RE, apply_vars, link_vars, send_post, start_timer
 
 router = Router()
 
@@ -33,6 +33,7 @@ class A(StatesGroup):
     descr = State()
     price = State()
     prompt = State()
+    mtext = State()
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
@@ -61,12 +62,31 @@ def var_keys(d: dict) -> list[str]:
     return keys
 
 
+# Тексты меню для обычных пользователей: редактируются в админке («📝 Тексты меню»)
+MENU_TEXTS = {
+    "welcome": ("Приветствие", "👋 <b>Добро пожаловать!</b>"),
+    "hint": ("Подсказка над списком шаблонов", "🛍 Выбери шаблон — бот сам соберёт по нему готовый пост."),
+    "empty": ("Если шаблонов нет", "Пока здесь пусто."),
+    "locked": ("Под закрытым шаблоном", "🔒 Доступ навсегда — {price} ⭐"),
+    "buy_btn": ("Кнопка покупки", "💰 Купить за {price} ⭐"),
+    "bought": ("После покупки", "✅ Шаблон «{title}» твой навсегда."),
+}
+
+
+def mtext(key: str, **kw) -> str:
+    v = db.get_setting("mt_" + key, "") or MENU_TEXTS[key][1]
+    try:
+        return v.format(**kw)
+    except (KeyError, IndexError, ValueError):
+        return v
+
+
 def default_prompt(k: str) -> str:
     return "🔗 Пришли ссылку" if k == "link" else f"✏️ Значение {{{k}}}"
 
 
 def access_label(r: dict) -> str:
-    return {"free": "🆓 Бесплатно", "sub": "⭐ По подписке",
+    return {"free": "🆓 Бесплатно", "sub": "🔒 Только админ",
             "price": f"💰 {r['price']} ⭐ навсегда"}.get(r["access"], "?")
 
 
@@ -93,7 +113,7 @@ async def on_paid(m: Message, p: dict, who: str):
     else:
         db.add_purchase(uid, p["tid"])
         r = db.shop_get(p["tid"])
-        await m.answer(f"✅ Шаблон «{html.escape(r['title'] if r else '?')}» твой навсегда.",
+        await m.answer(mtext("bought", title=html.escape(r["title"] if r else "?"), price=p["amount"]),
                        reply_markup=kb([cb("✍️ Создать пост", f"u:f:{p['tid']}")]))
         await notify(m.bot, p["owner_id"], f"🛍 {who} купил(а) шаблон «{r['title'] if r else p['tid']}» "
                      f"за {p['amount']} ⭐")
@@ -111,21 +131,8 @@ async def user_home(bot: Bot, chat_id: int, uid: int, msg: Message | None = None
     for r in items:
         mark = "✅" if access.can_use(uid, r["tid"]) else "🔒"
         rows.append([cb(f"{mark} {r['title']}", f"u:t:{r['tid']}")])
-    text = "👋 <b>Добро пожаловать!</b>\n\n"
-    if items:
-        text += "🛍 Выбери шаблон — бот сам соберёт по нему готовый пост.\n"
-    if access.paywall_on():
-        price, days = db.get_setting("pay_price", "100"), db.get_setting("pay_days", "30")
-        until = db.sub_until(uid)
-        if until > time.time():
-            text += f"\n⭐ Редактор доступен до <b>{fmt_date(until)}</b> — /post"
-            rows.append([cb(f"⭐ Продлить на {days} дн. — {price} ⭐", "u:sub")])
-        else:
-            text += (f"\n✨ <b>Полный редактор постов</b>: свои шаблоны, кнопки, премиум-эмодзи, "
-                     f"таймеры — {price} ⭐ за {days} дн.")
-            rows.append([cb(f"⭐ Открыть редактор — {price} ⭐", "u:sub")])
-    if not items and not access.paywall_on():
-        text += "Пока здесь пусто."
+    text = mtext("welcome") + "\n\n"
+    text += (mtext("hint") + "\n") if items else mtext("empty")
     if access.has_editor(uid):
         rows.append([cb("🛠 Редактор", "panel")])
     if msg:
@@ -165,17 +172,6 @@ async def home_cb(c: CallbackQuery, state: FSMContext):
     await user_home(c.bot, c.message.chat.id, c.from_user.id, c.message)
 
 
-@router.callback_query(F.data == "u:sub")
-async def buy_sub(c: CallbackQuery):
-    if not access.paywall_on():
-        await c.answer("Сейчас недоступно", show_alert=True)
-        return
-    price, days = int(db.get_setting("pay_price", "100")), int(db.get_setting("pay_days", "30"))
-    await c.answer()
-    await send_invoice(c.bot, c.message.chat.id, "sub", price, f"Редактор на {days} дн.",
-                       f"Полный доступ к редактору постов на {days} дней", days=days)
-
-
 async def template_card(bot: Bot, chat_id: int, uid: int, tid: int, msg: Message | None = None):
     r = db.shop_get(tid)
     t = db.get_template_any(tid)
@@ -202,13 +198,11 @@ async def template_card(bot: Bot, chat_id: int, uid: int, tid: int, msg: Message
                        SwitchInlineQueryChosenChat(query=f"#{tid} ", allow_user_chats=True,
                                                    allow_bot_chats=True, allow_group_chats=True,
                                                    allow_channel_chats=True))])
-    elif r["access"] == "sub":
-        text += "\n🔒 Доступен по подписке."
-        if access.paywall_on():
-            rows.append([cb(f"⭐ Оформить подписку — {db.get_setting('pay_price', '100')} ⭐", "u:sub")])
+    elif r["access"] == "sub" or r["price"] <= 0:
+        text += "\n🔒 Шаблон пока недоступен."
     else:
-        text += f"\n🔒 Доступ навсегда — {r['price']} ⭐"
-        rows.append([cb(f"💰 Купить за {r['price']} ⭐", f"u:b:{tid}")])
+        text += "\n" + mtext("locked", price=r["price"], title=r["title"])
+        rows.append([cb(mtext("buy_btn", price=r["price"], title=r["title"])[:60], f"u:b:{tid}")])
     if access.is_admin(uid):
         rows.append([cb("⚙️ Настроить (админ)", f"a:t:{tid}")])
     rows.append([cb("⬅️ Меню", "u:home")])
@@ -284,14 +278,17 @@ async def finish_fill(bot: Bot, chat_id: int, uid: int, state: FSMContext):
     t = db.get_template_any(data["tid"])
     d = db.empty_draft()
     d.update(apply_vars(t["data"], data["vals"]))
-    db.save_draft(uid, d)
+    db.save_draft(uid, d)  # в черновике таймер ещё «от отправки»: у каждой отправки свой отсчёт
     await state.set_state(None)
     await state.update_data(last_tid=data["tid"], last_vals=data["vals"])
+    started = start_timer(d)
     try:
-        await send_post(bot, chat_id, d)
+        sent = await send_post(bot, chat_id, started)
     except TelegramBadRequest as e:
         await bot.send_message(chat_id, f"❌ Telegram не принял пост: <code>{html.escape(e.message)}</code>")
         return
+    # запоминаем, чтобы бот сам обновлял живой таймер в этом сообщении
+    db.add_sent(uid, chat_id, "Чат с ботом", sent.message_id, started)
     args = " | ".join([data["vals"].get("link", "")] +
                       [data["vals"][k] for k in data["keys"] if k.isdigit()]).strip(" |")
     rows = [
@@ -331,19 +328,16 @@ def admin_only(c_or_m) -> bool:
 
 async def admin_home(bot: Bot, chat_id: int, msg: Message | None = None):
     st = db.stats()
-    on = access.paywall_on()
-    price, days = db.get_setting("pay_price", "100"), db.get_setting("pay_days", "30")
     me = await bot.me()
     text = (
         "👑 <b>Админка</b>\n\n"
-        f"👥 Пользователей: {st['users']}\n⭐ Активных подписок: {st['subs']}\n"
+        f"👥 Пользователей: {st['users']}\n"
         f"🛍 Покупок шаблонов: {st['purchases']}\n💰 Всего получено: {st['stars']} ⭐\n\n"
-        f"<b>Платный редактор:</b> {'✅ включён' if on else '⛔ выключен'} — {price} ⭐ / {days} дн.\n"
+        "Редактор постов доступен только админам; пользователи покупают доступ к шаблонам.\n"
         f"Ссылка на магазин: <code>https://t.me/{me.username}?start=shop</code>")
     rows = [
-        [cb("⛔ Выключить платный редактор" if on else "✅ Включить платный редактор", "a:pt")],
-        [cb("💲 Цена и срок подписки", "a:pp")],
         [cb("🛍 Шаблоны для пользователей", "a:tl")],
+        [cb("📝 Тексты меню", "a:mt")],
         [cb("🎁 Выдать / забрать доступ", "a:g")],
         [cb("⬅️ К посту", "panel")],
     ]
@@ -393,6 +387,17 @@ async def admin_guard(c: CallbackQuery, state: FSMContext):
             "Забрать доступ: <code>123456789 0</code>\n"
             "Подарить шаблон навсегда: <code>123456789 t5</code> (5 — номер шаблона)",
             reply_markup=kb([cb("⬅️ Админка", "a:h")]))
+    elif act == "mt":
+        await menu_texts_screen(c.message)
+    elif act == "mte":
+        await state.set_state(A.mtext)
+        await state.update_data(key=parts[2])
+        label, default = MENU_TEXTS[parts[2]]
+        cur = db.get_setting("mt_" + parts[2], "") or default
+        await c.message.edit_text(
+            f"✏️ <b>{label}</b>\nСейчас:\n<code>{html.escape(cur)}</code>\n\nПришли новый текст "
+            "(HTML: &lt;b&gt;, &lt;i&gt;…). Можно {price} и {title}, где это уместно. «-» — вернуть по умолчанию.",
+            reply_markup=kb([cb("⬅️ Тексты", "a:mt")]))
     elif act == "tl":
         await admin_templates(c)
     elif act == "t":
@@ -403,8 +408,8 @@ async def admin_guard(c: CallbackQuery, state: FSMContext):
         if act == "pub":
             r["published"] = 0 if r["published"] else 1
         else:
-            order = ["free", "sub", "price"]
-            r["access"] = order[(order.index(r["access"]) + 1) % 3]
+            order = ["free", "price"]
+            r["access"] = order[(order.index(r["access"]) + 1) % 2] if r["access"] in order else "free"
         db.shop_save(r)
         await admin_tpl(c.bot, c.message, tid)
     elif act in ("ti", "de", "pr"):
@@ -426,6 +431,26 @@ async def admin_guard(c: CallbackQuery, state: FSMContext):
         db.conn().execute("DELETE FROM shop WHERE tid=?", (int(parts[2]),))
         db.conn().commit()
         await admin_templates(c)
+
+
+async def menu_texts_screen(msg: Message):
+    rows = [[cb(f"✏️ {label}", f"a:mte:{k}")] for k, (label, _) in MENU_TEXTS.items()]
+    rows.append([cb("⬅️ Админка", "a:h")])
+    await msg.edit_text("📝 <b>Тексты меню для пользователей</b>\nВыбери, что изменить.", reply_markup=kb(*rows))
+
+
+@router.message(A.mtext, F.text)
+async def a_mtext(m: Message, state: FSMContext):
+    key = (await state.get_data())["key"]
+    v = m.html_text.strip()
+    try:
+        v.format(price=1, title="x")
+    except (KeyError, IndexError, ValueError):
+        await m.answer("В тексте лишние фигурные скобки. Допустимы только {price} и {title}.")
+        return
+    db.set_setting("mt_" + key, "" if v == "-" else v[:500])
+    await state.clear()
+    await m.answer("✅ Сохранено.", reply_markup=kb([cb("📝 Тексты меню", "a:mt")]))
 
 
 async def admin_templates(c: CallbackQuery):
