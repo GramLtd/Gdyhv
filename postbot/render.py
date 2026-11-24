@@ -48,6 +48,21 @@ VAR_RE = re.compile(r"\{(link|link_text|link_name|link_num|link_slug|[1-9])\}")
 LINK_RE = re.compile(r"^(https?://|t\.me/|tg://|@)\S+$", re.I)
 
 
+# {…} с любым мусором внутри: теги разметки, невидимые символы, пробелы, &nbsp;
+LOOSE_VAR_RE = re.compile(r"\{((?:<[^>]{0,200}>|&[a-z#0-9]{1,8};|[^{}<]){1,200}?)\}", re.I)
+INVISIBLE_RE = re.compile(r"<[^>]*>|&[a-z#0-9]+;|[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]",
+                          re.I)
+# кириллица, похожая на латиницу (на случай автозамены раскладки)
+LOOKALIKE = str.maketrans("аеіклмнорстуухАЕКМНОРСТХ", "aeiklmnopctyyxAEKMHOPCTX")
+
+
+def clean_var(inner: str) -> str:
+    """«<i>link</i>_\u200bslug » → «link_slug»."""
+    k = INVISIBLE_RE.sub("", inner).translate(LOOKALIKE).lower()
+    k = k.replace("-", "_").replace("—", "_")
+    return k
+
+
 def link_vars(url: str) -> dict:
     """Достаёт текст из ссылки: t.me/nft/PlushPepe-1234 → «Plush Pepe #1234»."""
     u = url.strip()
@@ -82,7 +97,9 @@ def parse_args(rest: str) -> dict:
 
 def has_vars(d: dict) -> bool:
     blob = json.dumps([d.get("html"), d.get("buttons")], ensure_ascii=False)
-    return bool(VAR_RE.search(blob) or re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob))
+    loose = any(re.fullmatch(r"link|link_text|link_name|link_num|link_slug|[1-9]", clean_var(m))
+                for m in LOOSE_VAR_RE.findall(blob))
+    return bool(loose or VAR_RE.search(blob) or re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob))
 
 
 def apply_vars(d: dict, vals: dict) -> dict:
@@ -93,8 +110,12 @@ def apply_vars(d: dict, vals: dict) -> dict:
         if esc:  # ссылка-заглушка https://link в тексте → настоящая ссылка
             text = re.sub(r'href="https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?"',
                           lambda _: 'href="%s"' % _html.escape(vals.get("link", ""), quote=True), text)
-        return VAR_RE.sub(lambda m: (_html.escape(vals[m.group(1)]) if esc else vals[m.group(1)])
-                          if m.group(1) in vals else m.group(0), text)
+        def rep(m):
+            key = clean_var(m.group(1))
+            if key not in vals:
+                return m.group(0)
+            return _html.escape(vals[key]) if esc else vals[key]
+        return LOOSE_VAR_RE.sub(rep, text)
     out = copy.deepcopy(d)
     out["html"] = sub(out.get("html") or "", True)
     for row in out.get("buttons") or []:

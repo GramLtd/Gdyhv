@@ -50,7 +50,10 @@ def fmt_date(ts: int) -> str:
 def var_keys(d: dict) -> list[str]:
     """Что спросить у пользователя: ссылку (одна на все {link…}) и {1}..{9} по порядку."""
     blob = json.dumps([d.get("html"), d.get("buttons")], ensure_ascii=False)
-    found = set(VAR_RE.findall(blob))
+    from render import LOOSE_VAR_RE, clean_var
+    found = set(VAR_RE.findall(blob)) | {
+        k for k in (clean_var(x) for x in LOOSE_VAR_RE.findall(blob))
+        if re.fullmatch(r"link|link_text|link_name|link_num|link_slug|[1-9]", k)}
     if re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob):
         found.add("link")
     keys = ["link"] if any(k.startswith("link") for k in found) else []
