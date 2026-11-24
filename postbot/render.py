@@ -114,7 +114,14 @@ def apply_vars(d: dict, vals: dict) -> dict:
             key = clean_var(m.group(1))
             if key not in vals:
                 return m.group(0)
-            return _html.escape(vals[key]) if esc else vals[key]
+            val = _html.escape(vals[key]) if esc else vals[key]
+            if not esc:
+                return val
+            # разметка внутри скобок (например, ссылка только на «link_slug») — сохраняем вокруг значения
+            tags = re.findall(r"<[^>]*>", m.group(1))
+            opens = "".join(t for t in tags if not t.startswith("</"))
+            closes = "".join(t for t in tags if t.startswith("</"))
+            return opens + val + closes
         return LOOSE_VAR_RE.sub(rep, text)
     out = copy.deepcopy(d)
     out["html"] = sub(out.get("html") or "", True)
