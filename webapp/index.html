@@ -73,7 +73,7 @@ input,textarea{font:inherit;color:var(--label)}
 .fan[data-skin="skin_crimson"]{background:#4D0514}.fan[data-skin="skin_ice"]{background:#1A6E9E}.fan[data-skin="skin_black"]{background:#000}
 .swatch{width:32px;height:32px;border-radius:8px;flex:none;border:1px solid var(--line)}
 .hub{position:absolute;inset:34%;border-radius:50%;background:#FF6B0A;display:grid;place-items:center;box-shadow:0 0 0 3px #1A1F27}
-.hub svg{width:70%;height:70%;animation:none!important}
+.hub svg{width:100%;height:100%;display:block;animation:none!important}
 .fan > svg{animation:spin var(--spin,1.4s) linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .rig-info{flex:1;min-width:0}
@@ -254,9 +254,9 @@ body{background:var(--bg);overflow-x:hidden}
 .fan[data-skin="skin_crimson"]{--b1:#FFD6DE;--b2:#E8325A;--b3:#6E0A20}
 .fan[data-skin="skin_ice"]{--b1:#FFFFFF;--b2:#8FD3FF;--b3:#2479B5}
 .fan[data-skin="skin_black"]{--b1:#6A7280;--b2:#2A2F38;--b3:#0B0D10}
-.hub{inset:37%;background:radial-gradient(circle at 35% 30%,#FFB070,#FF6B0A 45%,#B84300 100%);
+.hub{inset:36%;display:block;background:none;
   box-shadow:0 0 0 3px #12151A,0 0 0 4px rgba(255,255,255,.08),0 4px 14px rgba(0,0,0,.7),inset 0 2px 3px rgba(255,255,255,.5);z-index:2}
-.hub::after{content:"";position:absolute;inset:8% 20% 50% 20%;border-radius:50%;background:linear-gradient(rgba(255,255,255,.55),transparent)}
+.hub::after{content:"";position:absolute;inset:4% 22% 58% 22%;opacity:.6;border-radius:50%;background:linear-gradient(rgba(255,255,255,.55),transparent)}
 .sparks{position:absolute;inset:0;pointer-events:none;z-index:3}
 .sparks b{position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:#FFB070;box-shadow:0 0 8px #FF6B0A;opacity:0;
   animation:spark 1.6s ease-out infinite}
@@ -264,6 +264,8 @@ body{background:var(--bg);overflow-x:hidden}
 .coin-fly{position:fixed;z-index:40;width:18px;height:18px;border-radius:50%;pointer-events:none;
   background:radial-gradient(circle at 35% 30%,#FFD2A8,#FF6B0A 55%,#A33C00);box-shadow:0 0 12px rgba(255,107,10,.8)}
 :root:not([data-theme="dark"]) .btn.tinted,:root:not([data-theme="dark"]) .bal-actions .pill:last-child{background:rgba(16,24,40,.05);border-color:rgba(16,24,40,.1)}
+.logo{background:none!important;box-shadow:0 4px 16px -2px rgba(255,102,0,.55)!important;border-radius:50%!important}.logo svg{width:30px!important;height:30px!important}
+.hub::after{display:none}
 </style>
 </head>
 <body>
@@ -292,7 +294,7 @@ body{background:var(--bg);overflow-x:hidden}
 
 <!-- ============ ГЛАВНАЯ ============ -->
 <header class="topbar">
-  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16V7l7 7 7-7v9"/></svg></div>
+  <div class="logo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.6" fill="#fff"/><path fill="#FF6600" d="M12 0C5.365 0 0 5.373 0 12.015c0 1.335.228 2.607.618 3.81h3.577V5.729L12 13.545l7.805-7.815v10.095h3.577c.389-1.203.618-2.475.618-3.81C24 5.375 18.635 0 12 0z"/><path fill="#4C4C4C" d="M10.212 15.307l-3.417-3.421v6.351H1.758C3.87 21.689 7.678 24 12 24s8.162-2.311 10.245-5.764h-5.04v-6.351l-3.386 3.421-1.788 1.79-1.814-1.79z"/></svg></div>
   <div class="brand">XMR Miner<small>Monero cloud mining</small></div>
   <div class="status"><i></i>Пул онлайн</div>
 </header>
@@ -326,7 +328,7 @@ body{background:var(--bg);overflow-x:hidden}
             <g id="blades" filter="url(#bs)"></g>
           </svg>
           <svg class="blur" viewBox="0 0 200 200"><use href="#blades"/></svg>
-          <div class="hub"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V8l6 6 6-6v8"/></svg></div>
+          <div class="hub"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.6" fill="#fff"/><path fill="#FF6600" d="M12 0C5.365 0 0 5.373 0 12.015c0 1.335.228 2.607.618 3.81h3.577V5.729L12 13.545l7.805-7.815v10.095h3.577c.389-1.203.618-2.475.618-3.81C24 5.375 18.635 0 12 0z"/><path fill="#4C4C4C" d="M10.212 15.307l-3.417-3.421v6.351H1.758C3.87 21.689 7.678 24 12 24s8.162-2.311 10.245-5.764h-5.04v-6.351l-3.386 3.421-1.788 1.79-1.814-1.79z"/></svg></div>
         </div>
         <div class="sparks" id="sparks"></div>
       </div>
