@@ -21,6 +21,7 @@ from aiogram.types import (
     SwitchInlineQueryChosenChat,
 )
 
+import access
 import db
 from render import (apply_vars, has_vars, parse_args, BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
                     send_post, switch_in_place)
@@ -157,12 +158,18 @@ inline-запросы, готовые ссылки на меню Telegram (на�
 /templates — шаблоны
 /sent — отправленные посты
 /emoji — узнать ID премиум-эмодзи
+/menu — шаблоны для пользователей
+/admin — платный доступ и магазин шаблонов (владелец)
 /cancel — отменить ввод"""
 
 
 @router.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     await state.clear()
+    if not access.has_editor(m.from_user.id):
+        import shop
+        await shop.user_home(m.bot, m.chat.id, m.from_user.id)
+        return
     await m.answer("👋 Привет! Я помогу собрать красивый пост.\n\n" + HELP)
     await show_panel(m.bot, m.chat.id, m.from_user.id)
 
@@ -983,9 +990,13 @@ async def deliver(bot: Bot, user_id: int, chat_id, reply_to: Message, state: FSM
     db.add_sent(user_id, chat.id, title, sent.message_id, d)
     link = post_link(chat, sent.message_id)
     rows = [[B(text="🔗 Открыть пост", url=link)]] if link else []
-    rows.append([cb("🗂 Отправленные", "sl"), BACK])
-    await reply_to.answer(f"✅ Отправлено в «{html.escape(title)}».\nЕго можно будет "
-                          "отредактировать в «🗂 Отправленные».", reply_markup=kb(*rows))
+    if access.has_editor(user_id):
+        rows.append([cb("🗂 Отправленные", "sl"), BACK])
+    else:
+        rows.append([cb("⬅️ Меню", "u:home")])
+    await reply_to.answer(f"✅ Отправлено в «{html.escape(title)}»." + (
+                          "\nЕго можно будет отредактировать в «🗂 Отправленные»."
+                          if access.has_editor(user_id) else ""), reply_markup=kb(*rows))
 
 
 @router.callback_query(F.data == "sh")
@@ -1052,12 +1063,12 @@ async def inline_q(q: InlineQuery):
     picked = []
     m = re.match(r"#(\d+)\s*(.*)$", s, re.S)
     if m:
-        t = db.get_template(uid, int(m.group(1)))
+        t = access.get_for(uid, int(m.group(1)))
         if t:
             picked.append((t, m.group(2)))
     else:
         low = s.lower()
-        for t in db.find_templates(uid, "", 200):
+        for t in access.templates_for(uid):
             name = t["name"].lower()
             if low == name or low.startswith(name + " "):
                 picked.append((t, s[len(name):]))
@@ -1076,7 +1087,7 @@ async def inline_q(q: InlineQuery):
             continue
     # 2) обычный поиск по названию
     if not results:
-        for t in db.find_templates(uid, s):
+        for t in [t for t in access.templates_for(uid) if s.lower() in t["name"].lower()][:50]:
             try:
                 r = inline_result(t)
                 if has_vars(t["data"]):
@@ -1417,6 +1428,11 @@ async def paid(m: Message):
     if not p:
         db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "unknown")
         await m.answer("Спасибо! Оплата получена.")
+        return
+    if p["kind"] in ("sub", "tpl"):
+        db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "ok")
+        import shop
+        await shop.on_paid(m, p, who)
         return
     if p["kind"] == "stars":
         db.log_paid(pid, payer.id, sp.total_amount, sp.telegram_payment_charge_id, "ok")

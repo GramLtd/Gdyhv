@@ -6,7 +6,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand, CallbackQuery, InlineQuery, Message
 
 import db
-from config import ADMIN_IDS, BOT_TOKEN
+from config import BOT_TOKEN
+import access
+import shop
 from handlers import router
 from render import edit_post, render_text  # noqa: F401
 
@@ -35,21 +37,29 @@ async def timer_loop(bot: Bot):
 
 
 class AccessMiddleware(BaseMiddleware):
-    """Если задан ADMIN_IDS — пускаем только их. Кнопки-окна (pp:) работают для всех."""
+    """Редактор — владельцу и подписчикам. Остальным: меню шаблонов, окна, оплата."""
 
     async def __call__(self, handler, event, data):
-        if ADMIN_IDS:
-            user = getattr(event, "from_user", None)
-            is_popup = (isinstance(event, CallbackQuery) and (event.data or "").startswith(("pp:", "pg:"))) \
-                or (isinstance(event, Message) and event.successful_payment is not None)
-            if not is_popup and (user is None or user.id not in ADMIN_IDS):
-                if isinstance(event, Message) and event.chat.type == "private":
-                    await event.answer("⛔ Нет доступа.")
-                elif isinstance(event, CallbackQuery):
-                    await event.answer("Нет доступа", show_alert=True)
-                elif isinstance(event, InlineQuery):
-                    await event.answer([], cache_time=60, is_personal=True)
-                return None
+        user = getattr(event, "from_user", None)
+        if user is None:
+            return await handler(event, data)
+        if access.has_editor(user.id) or isinstance(event, InlineQuery):
+            return await handler(event, data)  # inline сам фильтрует доступные шаблоны
+        if isinstance(event, CallbackQuery):
+            if (event.data or "").startswith(("pp:", "pg:", "u:")):
+                return await handler(event, data)
+            await event.answer("🔒 Нужен доступ к редактору — /menu", show_alert=True)
+            return None
+        if isinstance(event, Message):
+            if event.successful_payment or event.chat.type != "private":
+                return await handler(event, data)
+            text = event.text or ""
+            st = await data["state"].get_state() if data.get("state") else None
+            if text.startswith(("/start", "/menu")) or (st or "").startswith("U:"):
+                return await handler(event, data)
+            db.touch_user(user.id, user.full_name)
+            await shop.user_home(event.bot, event.chat.id, user.id)
+            return None
         return await handler(event, data)
 
 
@@ -62,6 +72,7 @@ async def main():
     dp = Dispatcher()
     for obs in (dp.message, dp.callback_query, dp.inline_query):
         obs.outer_middleware(AccessMiddleware())
+    dp.include_router(shop.router)
     dp.include_router(router)
     await bot.set_my_commands([
         BotCommand(command="post", description="Редактор поста"),
@@ -69,6 +80,8 @@ async def main():
         BotCommand(command="templates", description="Шаблоны"),
         BotCommand(command="sent", description="Отправленные посты"),
         BotCommand(command="emoji", description="ID премиум-эмодзи"),
+        BotCommand(command="menu", description="Шаблоны и доступ"),
+        BotCommand(command="admin", description="Админка (владелец)"),
         BotCommand(command="help", description="Помощь"),
         BotCommand(command="cancel", description="Отменить ввод"),
     ])

@@ -251,3 +251,128 @@ def sent_with_live_timer():
 def set_sent_data(sid: int, d: dict) -> None:
     conn().execute("UPDATE sent SET data=? WHERE id=?", (json.dumps(post_part(d), ensure_ascii=False), sid))
     conn().commit()
+
+
+# ---- платный доступ ----
+
+def _init_access():
+    conn().executescript(
+        """
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS subs (user_id INTEGER PRIMARY KEY, until INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS shop (
+            tid INTEGER PRIMARY KEY,
+            title TEXT NOT NULL,
+            descr TEXT NOT NULL DEFAULT '',
+            access TEXT NOT NULL DEFAULT 'free',   -- free | sub | price
+            price INTEGER NOT NULL DEFAULT 0,
+            prompts TEXT NOT NULL DEFAULT '{}',
+            published INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS purchases (
+            user_id INTEGER NOT NULL, tid INTEGER NOT NULL, created INTEGER,
+            PRIMARY KEY (user_id, tid)
+        );
+        CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, name TEXT, seen INTEGER);
+        """)
+
+
+def get_setting(key: str, default: str = "") -> str:
+    _init_access()
+    row = conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value) -> None:
+    _init_access()
+    conn().execute("INSERT INTO settings(key, value) VALUES(?,?) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+    conn().commit()
+
+
+def sub_until(uid: int) -> int:
+    _init_access()
+    row = conn().execute("SELECT until FROM subs WHERE user_id=?", (uid,)).fetchone()
+    return row["until"] if row else 0
+
+
+def extend_sub(uid: int, days: int) -> int:
+    start = max(sub_until(uid), int(time.time()))
+    until = start + days * 86400
+    conn().execute("INSERT INTO subs(user_id, until) VALUES(?,?) "
+                   "ON CONFLICT(user_id) DO UPDATE SET until=excluded.until", (uid, until))
+    conn().commit()
+    return until
+
+
+def revoke_sub(uid: int) -> None:
+    _init_access()
+    conn().execute("DELETE FROM subs WHERE user_id=?", (uid,))
+    conn().commit()
+
+
+def shop_get(tid: int):
+    _init_access()
+    row = conn().execute("SELECT * FROM shop WHERE tid=?", (tid,)).fetchone()
+    if not row:
+        return None
+    r = dict(row)
+    r["prompts"] = json.loads(r["prompts"])
+    return r
+
+
+def shop_save(r: dict) -> None:
+    _init_access()
+    conn().execute(
+        "INSERT INTO shop(tid, title, descr, access, price, prompts, published) VALUES(?,?,?,?,?,?,?) "
+        "ON CONFLICT(tid) DO UPDATE SET title=excluded.title, descr=excluded.descr, "
+        "access=excluded.access, price=excluded.price, prompts=excluded.prompts, "
+        "published=excluded.published",
+        (r["tid"], r["title"], r.get("descr", ""), r.get("access", "free"), int(r.get("price", 0)),
+         json.dumps(r.get("prompts", {}), ensure_ascii=False), int(r.get("published", 0))))
+    conn().commit()
+
+
+def shop_list(published_only: bool = True):
+    _init_access()
+    q = "SELECT s.* FROM shop s JOIN templates t ON t.id = s.tid"
+    if published_only:
+        q += " WHERE s.published=1"
+    out = []
+    for row in conn().execute(q + " ORDER BY s.tid DESC").fetchall():
+        r = dict(row)
+        r["prompts"] = json.loads(r["prompts"])
+        out.append(r)
+    return out
+
+
+def has_purchase(uid: int, tid: int) -> bool:
+    _init_access()
+    return conn().execute("SELECT 1 FROM purchases WHERE user_id=? AND tid=?",
+                          (uid, tid)).fetchone() is not None
+
+
+def add_purchase(uid: int, tid: int) -> None:
+    _init_access()
+    conn().execute("INSERT OR IGNORE INTO purchases(user_id, tid, created) VALUES(?,?,?)",
+                   (uid, tid, int(time.time())))
+    conn().commit()
+
+
+def touch_user(uid: int, name: str) -> None:
+    _init_access()
+    conn().execute("INSERT INTO users(user_id, name, seen) VALUES(?,?,?) ON CONFLICT(user_id) "
+                   "DO UPDATE SET name=excluded.name, seen=excluded.seen", (uid, name, int(time.time())))
+    conn().commit()
+
+
+def stats() -> dict:
+    _init_access()
+    now = int(time.time())
+    c = conn()
+    return {
+        "users": c.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+        "subs": c.execute("SELECT COUNT(*) FROM subs WHERE until>?", (now,)).fetchone()[0],
+        "purchases": c.execute("SELECT COUNT(*) FROM purchases").fetchone()[0],
+        "stars": c.execute("SELECT COALESCE(SUM(amount),0) FROM paid WHERE status='ok'").fetchone()[0],
+    }
