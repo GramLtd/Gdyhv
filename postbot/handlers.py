@@ -2,6 +2,7 @@ import html
 import json
 import re
 import time
+from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -21,8 +22,8 @@ from aiogram.types import (
 )
 
 import db
-from render import (BUTTON_TYPES, LINK_PRESETS, STYLES, edit_post, inline_result,
-                    send_post)
+from render import (BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
+                    send_post, switch_in_place)
 
 router = Router()
 
@@ -44,6 +45,8 @@ class S(StatesGroup):
     target = State()
     emoji = State()
     gift_to = State()
+    timer_until = State()
+    timer_done = State()
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
@@ -67,7 +70,8 @@ def panel_kb(d: dict) -> InlineKeyboardMarkup:
         [cb("🔗 Превью ссылок: " + ("выкл" if d["no_preview"] else "вкл"), "tp"),
          cb(("⬆️ Медиа/превью над текстом" if d["preview_above"] else "⬇️ Медиа/превью под текстом"),
             "ta")],
-        [cb("🧾 Текст как HTML-код", "hc")],
+        [cb("🧾 Текст как HTML-код", "hc"),
+         cb("⏱ Таймер" + (" ✅" if d.get("timer") else ""), "tm")],
     ]
     if d.get("template_id"):
         rows.append([cb("💾 Обновить шаблон", "tu"), cb("💾 Как новый", "ts")])
@@ -432,6 +436,8 @@ def validate_value(t: str, v: str) -> tuple[str | None, str | None]:
         if not amount.isdigit() or not 1 <= int(amount) <= 10000:
             return None, "Нужно число звёзд от 1 до 10000."
         return f"{int(amount)}|{desc.strip()[:255]}", None
+    if t == "page":
+        return (v, None) if v.isdigit() else (None, "Выбери шаблон из списка.")
     if t in ("inline", "inline_here", "inline_pick"):
         return ("" if v.strip() == "-" else v), None
     return v, None
@@ -456,6 +462,9 @@ async def btn_text_in(m: Message, state: FSMContext):
         return
     if data["type"] == "gift":
         await gift_picker(m.bot, m.chat.id, state)
+        return
+    if data["type"] == "page":
+        await page_picker(m.bot, m.chat.id, m.from_user.id, state)
         return
     await state.set_state(S.btn_value)
     await m.answer(BUTTON_TYPES[data["type"]][1], reply_markup=kb([BACK]))
@@ -521,6 +530,9 @@ def btn_info(d: dict, r: int, i: int) -> str:
     b = d["buttons"][r][i]
     label = BUTTON_TYPES.get(b["type"], ("?",))[0]
     val = b.get("value") or "—"
+    if b["type"] == "page":
+        t = db.get_template_any(int(val)) if val.isdigit() else None
+        val = f"→ шаблон «{t['name']}»" if t else "→ шаблон удалён!"
     if b["type"] == "stars":
         val = "⭐ " + val.replace("|", " — ").rstrip(" —")
     return (f"\n<b>Кнопка:</b> {html.escape(b['text'])}\n"
@@ -673,6 +685,10 @@ async def btn_change_type(c: CallbackQuery, state: FSMContext):
     if t == "gift":
         await c.message.delete()
         await gift_picker(c.bot, c.message.chat.id, state)
+        return
+    if t == "page":
+        await c.message.delete()
+        await page_picker(c.bot, c.message.chat.id, c.from_user.id, state)
         return
     await state.set_state(S.btn_value)
     await c.message.edit_text(BUTTON_TYPES[t][1], reply_markup=kb([BACK]))
@@ -1340,6 +1356,203 @@ async def notify(bot: Bot, uid: int, text: str):
         await bot.send_message(uid, text)
     except (TelegramBadRequest, TelegramForbiddenError):
         pass
+
+
+# ===================== кнопка «сменить пост» =====================
+
+async def page_picker(bot: Bot, chat_id: int, uid: int, state: FSMContext):
+    tpls = db.list_templates(uid)
+    rows = [[cb(f"📄 {t['name']}", f"pgp:{t['id']}")] for t in tpls[:50]]
+    rows.append([BACK])
+    await bot.send_message(
+        chat_id,
+        "🔄 <b>Во что превратится пост после нажатия?</b>\n\n"
+        "Выбери шаблон — по нажатию бот заменит текст, медиа и кнопки поста на содержимое "
+        "шаблона. В шаблоне могут быть свои кнопки «🔄 Сменить пост» — так строятся цепочки, "
+        "меню, квизы, кнопка «назад».\n\n"
+        "💡 Шаблон <b>без текста и медиа</b> заменит только кнопки, текст останется.\n"
+        "⚠️ В каналах и группах пост меняется у всех, кто его видит.\n"
+        "⚠️ Текстовый пост не может стать постом с медиа (ограничение Telegram)."
+        + ("" if tpls else "\n\n❗ Сначала сохрани нужный экран как шаблон (💾), потом вернись сюда."),
+        reply_markup=kb(*rows))
+
+
+@router.callback_query(F.data.startswith("pgp:"))
+async def page_pick(c: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("type"):
+        await c.answer("Начни заново", show_alert=True)
+        return
+    await c.answer()
+    await c.message.delete()
+    await finish_button(c.message.model_copy(update={"from_user": c.from_user}), state,
+                        c.data.split(":")[1])
+
+
+@router.callback_query(F.data.startswith("pg:"))
+async def page_press(c: CallbackQuery):
+    t = db.get_template_any(int(c.data.split(":")[1]))
+    if not t:
+        await c.answer("Эта кнопка больше не работает", show_alert=True)
+        return
+    d = t["data"]
+    for row in d.get("buttons") or []:  # окна/подарки нового экрана должны работать
+        for b in row:
+            b.setdefault("uid", db.new_uid())
+    msg = c.message if c.message and hasattr(c.message, "message_id") and c.message.date else None
+    try:
+        if c.inline_message_id:
+            await switch_in_place(c.bot, d, inline_id=c.inline_message_id)
+        else:
+            has_media = bool(getattr(msg, "photo", None) or getattr(msg, "video", None)
+                             or getattr(msg, "animation", None) or getattr(msg, "document", None))
+            await switch_in_place(c.bot, d, chat_id=c.message.chat.id,
+                                  message_id=c.message.message_id, cur_has_media=has_media)
+            db.update_sent_by_msg(c.message.chat.id, c.message.message_id, d)
+    except TelegramBadRequest as e:
+        if "not modified" not in e.message:
+            await c.answer("Не получилось обновить пост", show_alert=True)
+            return
+    await c.answer()
+
+
+# ===================== таймер =====================
+
+def timer_text(d: dict) -> str:
+    t = d.get("timer")
+    s = ("⏱ <b>Таймер</b>\n\nПоставь <code>{timer}</code> в тексте поста там, где он нужен.\n\n"
+         "• <b>Живой</b> — бот каждую минуту обновляет пост: <code>2 д 05:13</code>, по "
+         "окончании пишет твой текст. Работает в постах, отправленных ботом "
+         "(сюда, в канал, в группу), не через inline.\n"
+         "• <b>Telegram</b> — Telegram сам показывает «через 3 часа» по-русски у каждого "
+         "зрителя, бот пост не трогает. Работает везде.\n\n")
+    if t:
+        when = datetime.fromtimestamp(t["until"], TZ).strftime("%d.%m.%Y %H:%M")
+        left = int(t["until"] - time.time())
+        s += (f"<b>До:</b> {when} ({TZ.key})\n<b>Осталось:</b> {fmt_left(left)}\n"
+              f"<b>Режим:</b> {'живой' if t['mode'] == 'live' else 'Telegram'}\n"
+              f"<b>По окончании:</b> {html.escape(t.get('done') or 'время вышло')}")
+        if "{timer}" not in (d.get("html") or ""):
+            s += "\n\n⚠️ В тексте нет <code>{timer}</code> — таймер не виден."
+    else:
+        s += "Таймер не задан."
+    return s
+
+
+def timer_kb(d: dict) -> InlineKeyboardMarkup:
+    t = d.get("timer")
+    rows = [[cb("🕐 Задать время окончания", "tmu")]]
+    if t:
+        rows.append([cb("Режим: " + ("🔁 живой" if t["mode"] == "live" else "📅 Telegram"), "tmm"),
+                     cb("🏁 Текст по окончании", "tmd")])
+        rows.append([cb("🗑 Убрать таймер", "tmx")])
+    rows.append([BACK])
+    return kb(*rows)
+
+
+@router.callback_query(F.data == "tm")
+async def timer_menu(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    d = db.get_draft(c.from_user.id)
+    await c.answer()
+    await c.message.edit_text(timer_text(d), reply_markup=timer_kb(d))
+
+
+@router.callback_query(F.data == "tmu")
+async def timer_until(c: CallbackQuery, state: FSMContext):
+    await state.set_state(S.timer_until)
+    await c.answer()
+    now = datetime.now(TZ).strftime("%d.%m.%Y %H:%M")
+    await c.message.edit_text(
+        f"🕐 Когда таймер закончится? Часовой пояс: {TZ.key}, сейчас {now}.\n\n"
+        "Примеры:\n<code>31.12.2026 23:59</code>\n<code>25.12 18:00</code>\n"
+        "<code>20:00</code> — сегодня (или завтра, если уже прошло)\n"
+        "<code>+2ч</code>, <code>+30м</code>, <code>+3д 4ч</code> — через столько",
+        reply_markup=kb([cb("⬅️ Таймер", "tm")]))
+
+
+def parse_until(text: str) -> int | None:
+    t = text.strip().lower()
+    now = datetime.now(TZ)
+    if t.startswith("+"):
+        total = 0
+        for num, unit in re.findall(r"(\d+)\s*([дdчhмm])", t):
+            total += int(num) * {"д": 86400, "d": 86400, "ч": 3600, "h": 3600,
+                                 "м": 60, "m": 60}[unit]
+        return int(now.timestamp()) + total if total else None
+    for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M", "%d.%m %H:%M", "%H:%M"):
+        try:
+            dt = datetime.strptime(t, fmt)
+        except ValueError:
+            continue
+        if fmt == "%H:%M":
+            dt = now.replace(hour=dt.hour, minute=dt.minute, second=0, microsecond=0)
+            if dt <= now:
+                dt = dt.fromtimestamp(dt.timestamp() + 86400, TZ)
+        else:
+            if "%Y" not in fmt and "%y" not in fmt:
+                dt = dt.replace(year=now.year)
+            dt = dt.replace(tzinfo=TZ)
+        return int(dt.timestamp())
+    return None
+
+
+@router.message(S.timer_until, F.text)
+async def timer_until_in(m: Message, state: FSMContext):
+    until = parse_until(m.text)
+    if not until or until <= time.time():
+        await m.answer("Не понял время (или оно уже прошло). Пример: <code>31.12.2026 23:59</code> "
+                       "или <code>+2ч</code>")
+        return
+    d = db.get_draft(m.from_user.id)
+    t = d.get("timer") or {"mode": "live", "done": "⏰ Время вышло!"}
+    t.update(until=until, finished=False)
+    d["timer"] = t
+    note = ""
+    if "{timer}" not in (d.get("html") or ""):
+        d["html"] = (d.get("html") or "") + "\n\n⏱ До конца: {timer}"
+        note = "Добавил в конец текста строку «⏱ До конца: {timer}» — перенеси куда хочешь.\n\n"
+    db.save_draft(m.from_user.id, d)
+    await state.clear()
+    await m.answer("✅ " + note + timer_text(d), reply_markup=timer_kb(d))
+
+
+@router.callback_query(F.data == "tmm")
+async def timer_mode(c: CallbackQuery):
+    d = db.get_draft(c.from_user.id)
+    if d.get("timer"):
+        d["timer"]["mode"] = "native" if d["timer"]["mode"] == "live" else "live"
+        db.save_draft(c.from_user.id, d)
+    await c.answer()
+    await c.message.edit_text(timer_text(d), reply_markup=timer_kb(d))
+
+
+@router.callback_query(F.data == "tmd")
+async def timer_done(c: CallbackQuery, state: FSMContext):
+    await state.set_state(S.timer_done)
+    await c.answer()
+    await c.message.edit_text("🏁 Что написать вместо таймера, когда время выйдет?",
+                              reply_markup=kb([cb("⬅️ Таймер", "tm")]))
+
+
+@router.message(S.timer_done, F.text)
+async def timer_done_in(m: Message, state: FSMContext):
+    d = db.get_draft(m.from_user.id)
+    if d.get("timer"):
+        d["timer"]["done"] = m.text.strip()[:200]
+        db.save_draft(m.from_user.id, d)
+    await state.clear()
+    await m.answer("✅ " + timer_text(d), reply_markup=timer_kb(d))
+
+
+@router.callback_query(F.data == "tmx")
+async def timer_del(c: CallbackQuery):
+    d = db.get_draft(c.from_user.id)
+    d["timer"] = None
+    d["html"] = (d.get("html") or "").replace("\n\n⏱ До конца: {timer}", "")
+    db.save_draft(c.from_user.id, d)
+    await c.answer("Таймер убран")
+    await back_to_panel(c)
 
 
 # ===================== сообщение без команды = контент поста =====================

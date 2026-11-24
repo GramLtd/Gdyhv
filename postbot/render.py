@@ -19,7 +19,43 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+import html as _html
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import db
+from config import TZ_NAME
+
+TZ = ZoneInfo(TZ_NAME)
+
+
+def fmt_left(sec: int) -> str:
+    if sec <= 0:
+        return "0:00"
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    return (f"{d} д {h:02d}:{m:02d}" if d else f"{h:02d}:{m:02d}")
+
+
+def render_text(d: dict) -> str:
+    """Подставляет таймер вместо {timer}."""
+    text = d.get("html") or ""
+    t = d.get("timer")
+    if not t or "{timer}" not in text:
+        return text
+    left = int(t["until"] - time.time())
+    if t.get("mode") == "native":
+        when = datetime.fromtimestamp(t["until"], TZ).strftime("%d.%m.%Y %H:%M")
+        rep = f'<tg-time unix="{t["until"]}" format="r">{when}</tg-time>'
+        if left <= 0 and t.get("done"):
+            rep = _html.escape(t["done"])
+    elif left <= 0:
+        rep = _html.escape(t.get("done") or "время вышло")
+    else:
+        rep = fmt_left(left)
+    return text.replace("{timer}", rep)
 
 # тип кнопки -> (подпись в меню, что спрашиваем у пользователя)
 BUTTON_TYPES = {
@@ -34,6 +70,7 @@ BUTTON_TYPES = {
               "Сколько звёзд запросить? (1–10000)\nМожно добавить описание через «|»: "
               "<code>50 | Поддержать канал</code>"),
     "gift": ("🎁 Запрос подарка Telegram", ""),
+    "page": ("🔄 Сменить пост (новый текст и кнопки)", ""),
     "inline": ("↗️ Inline-запрос в другой чат", "Отправь текст запроса (можно пустым: «-»)"),
     "inline_here": ("🔎 Inline-запрос в этом чате", "Отправь текст запроса (можно пустым: «-»)"),
     "inline_pick": ("👥 Выбор чата (пользователи/группы/каналы)",
@@ -86,6 +123,8 @@ def build_button(b: dict) -> InlineKeyboardButton:
     elif t in ("alert", "toast"):
         db.put_popup(b["uid"], v, t == "alert")
         kw["callback_data"] = f"pp:{b['uid']}"
+    elif t == "page":
+        kw["callback_data"] = f"pg:{v}"
     elif t in ("stars", "gift"):
         kw["url"] = b["link"]
     elif t == "copy":
@@ -122,7 +161,7 @@ def preview_opts(d: dict) -> LinkPreviewOptions:
 
 async def send_post(bot: Bot, chat_id: int, d: dict, plain: bool = False):
     markup = build_markup(d, plain)
-    text = d.get("html") or ""
+    text = render_text(d)
     m = d.get("media")
     if m:
         common = dict(chat_id=chat_id, caption=text or None, parse_mode="HTML",
@@ -145,7 +184,7 @@ def _input_media(d: dict):
     m = d["media"]
     cls = {"photo": InputMediaPhoto, "video": InputMediaVideo,
            "animation": InputMediaAnimation, "document": InputMediaDocument}[m["type"]]
-    kw = dict(media=m["file_id"], caption=d.get("html") or None, parse_mode="HTML")
+    kw = dict(media=m["file_id"], caption=render_text(d) or None, parse_mode="HTML")
     if m["type"] != "document":
         kw["show_caption_above_media"] = bool(d.get("preview_above"))
     return cls(**kw)
@@ -161,9 +200,9 @@ async def edit_post(bot: Bot, chat_id: int, message_id: int, old: dict, d: dict)
             return await bot.edit_message_media(chat_id=chat_id, message_id=message_id,
                                                 media=_input_media(d), reply_markup=markup)
         return await bot.edit_message_caption(chat_id=chat_id, message_id=message_id,
-                                              caption=d.get("html") or None, parse_mode="HTML",
+                                              caption=render_text(d) or None, parse_mode="HTML",
                                               reply_markup=markup)
-    return await bot.edit_message_text(text=d.get("html") or "‎", chat_id=chat_id,
+    return await bot.edit_message_text(text=render_text(d) or "‎", chat_id=chat_id,
                                        message_id=message_id, parse_mode="HTML",
                                        reply_markup=markup,
                                        link_preview_options=preview_opts(d))
@@ -172,7 +211,7 @@ async def edit_post(bot: Bot, chat_id: int, message_id: int, old: dict, d: dict)
 def inline_result(tpl: dict):
     d, rid, title = tpl["data"], str(tpl["id"]), tpl["name"]
     markup = build_markup(d)
-    text = d.get("html") or ""
+    text = render_text(d)
     m = d.get("media")
     if not m:
         return InlineQueryResultArticle(
@@ -189,3 +228,27 @@ def inline_result(tpl: dict):
     if m["type"] == "animation":
         return InlineQueryResultCachedGif(gif_file_id=m["file_id"], **kw)
     return InlineQueryResultCachedDocument(document_file_id=m["file_id"], **kw)
+
+
+async def switch_in_place(bot: Bot, d: dict, *, chat_id=None, message_id=None,
+                          inline_id=None, cur_has_media=None):
+    """Превращает нажатое сообщение в пост d. Пустой текст без медиа — меняем только кнопки."""
+    markup = build_markup(d)
+    where = ({"inline_message_id": inline_id} if inline_id
+             else {"chat_id": chat_id, "message_id": message_id})
+    text = render_text(d)
+    if not text and not d.get("media"):
+        return await bot.edit_message_reply_markup(reply_markup=markup, **where)
+    if d.get("media"):
+        return await bot.edit_message_media(media=_input_media(d), reply_markup=markup, **where)
+    if cur_has_media is None:  # inline-сообщение: не знаем, что внутри — пробуем оба
+        try:
+            return await bot.edit_message_text(text=text, parse_mode="HTML", reply_markup=markup,
+                                               link_preview_options=preview_opts(d), **where)
+        except Exception:  # noqa: BLE001
+            cur_has_media = True
+    if cur_has_media:
+        return await bot.edit_message_caption(caption=text, parse_mode="HTML",
+                                              reply_markup=markup, **where)
+    return await bot.edit_message_text(text=text, parse_mode="HTML", reply_markup=markup,
+                                       link_preview_options=preview_opts(d), **where)

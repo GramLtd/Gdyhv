@@ -67,6 +67,7 @@ def empty_draft() -> dict:
         "preview_above": False, # превью ссылки над текстом
         "edit_target": None,    # id записи из sent, если редактируем отправленный пост
         "template_id": None,    # id шаблона, из которого загружен черновик
+        "timer": None,          # {"until": unix, "mode": "live|native", "done": "текст"}
     }
 
 
@@ -95,7 +96,7 @@ def new_uid() -> str:
 
 def post_part(d: dict) -> dict:
     """Только содержимое поста (без служебных полей черновика)."""
-    return {k: d.get(k) for k in ("html", "media", "buttons", "no_preview", "preview_above")}
+    return {k: d.get(k) for k in ("html", "media", "buttons", "no_preview", "preview_above", "timer")}
 
 
 def list_templates(user_id: int):
@@ -219,4 +220,34 @@ def get_payment(uid: str):
 def log_paid(uid: str, payer_id: int, amount: int, charge_id: str, status: str) -> None:
     conn().execute("INSERT INTO paid(uid, payer_id, amount, charge_id, status, created) "
                    "VALUES(?,?,?,?,?,?)", (uid, payer_id, amount, charge_id, status, int(time.time())))
+    conn().commit()
+
+
+def get_template_any(tid: int):
+    """Шаблон по id без проверки владельца — для кнопок «сменить пост»."""
+    row = conn().execute("SELECT * FROM templates WHERE id=?", (tid,)).fetchone()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["name"], "data": json.loads(row["data"])}
+
+
+def update_sent_by_msg(chat_id: int, message_id: int, d: dict) -> None:
+    conn().execute("UPDATE sent SET data=? WHERE chat_id=? AND message_id=?",
+                   (json.dumps(post_part(d), ensure_ascii=False), chat_id, message_id))
+    conn().commit()
+
+
+def sent_with_live_timer():
+    rows = conn().execute("SELECT * FROM sent WHERE data LIKE '%\"mode\": \"live\"%'").fetchall()
+    out = []
+    for r in rows:
+        d = json.loads(r["data"])
+        t = d.get("timer")
+        if t and t.get("mode") == "live" and not t.get("finished") and "{timer}" in (d.get("html") or ""):
+            out.append((r, d))
+    return out
+
+
+def set_sent_data(sid: int, d: dict) -> None:
+    conn().execute("UPDATE sent SET data=? WHERE id=?", (json.dumps(post_part(d), ensure_ascii=False), sid))
     conn().commit()
