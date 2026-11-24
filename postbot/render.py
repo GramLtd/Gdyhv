@@ -102,6 +102,12 @@ def has_vars(d: dict) -> bool:
     return bool(loose or VAR_RE.search(blob) or re.search(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?[\"<]", blob))
 
 
+def me_vals(uid: int, username: str | None) -> dict:
+    """{my_id} и {my_link} — ссылка на профиль того, кто отправил пост (оттуда «Подарок»)."""
+    link = f"https://t.me/{username}?profile" if username else f"tg://user?id={uid}"
+    return {"my_id": str(uid), "my_link": link}
+
+
 def apply_vars(d: dict, vals: dict) -> dict:
     """Копия поста с подставленными значениями (в тексте — экранированными)."""
     def sub(text: str, esc: bool) -> str:
@@ -213,7 +219,7 @@ LINK_PRESETS = [
     ("🔐 Прокси", "https://t.me/proxy?{x}", "server=..&port=..&secret=.."),
     ("⚙️ Настройки Telegram", "tg://settings", None),
     ("⭐ Telegram Premium", "tg://premium_offer", None),
-    ("🎁 Меню подарков → тому, кто отправил пост", "tg://send_gift?to={my_id}", None),
+    ("🎁 Профиль отправителя поста (там «Подарок»)", "{my_link}", None),
     ("🎁 Подарить Premium", "tg://premium_multigift", None),
     ("💫 Telegram Stars", "tg://stars", None),
     ("📂 Папки чатов", "tg://settings/folders", None),

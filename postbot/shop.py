@@ -16,7 +16,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton as B, InlineKeybo
 import access
 import db
 from config import ADMIN_IDS
-from render import TZ, VAR_RE, apply_vars, link_vars, send_post, start_timer
+from render import TZ, VAR_RE, apply_vars, me_vals, link_vars, send_post, start_timer
 
 router = Router()
 
@@ -261,7 +261,7 @@ async def fill_start(c: CallbackQuery, state: FSMContext):
         return
     await c.answer()
     await state.set_state(U.fill)
-    await state.update_data(tid=tid, uid=uid, keys=var_keys(t["data"]), idx=0, vals={})
+    await state.update_data(tid=tid, uid=uid, uname=c.from_user.username, keys=var_keys(t["data"]), idx=0, vals={})
     await ask_next(c.bot, c.message.chat.id, state)
 
 
@@ -286,7 +286,7 @@ async def finish_fill(bot: Bot, chat_id: int, uid: int, state: FSMContext):
     data = await state.get_data()
     t = db.get_template_any(data["tid"])
     d = db.empty_draft()
-    d.update(apply_vars(t["data"], {**data["vals"], "my_id": str(uid)}))
+    d.update(apply_vars(t["data"], {**data["vals"], **me_vals(uid, data.get("uname"))}))
     db.save_draft(uid, d)  # в черновике таймер ещё «от отправки»: у каждой отправки свой отсчёт
     await state.set_state(None)
     await state.update_data(last_tid=data["tid"], last_vals=data["vals"])

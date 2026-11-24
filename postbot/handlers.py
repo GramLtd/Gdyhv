@@ -23,7 +23,7 @@ from aiogram.types import (
 
 import access
 import db
-from render import (apply_vars, has_vars, parse_args, BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
+from render import (apply_vars, me_vals, has_vars, parse_args, BUTTON_TYPES, LINK_PRESETS, STYLES, TZ, edit_post, fmt_left, inline_result,
                     send_post, start_timer, switch_in_place)
 
 router = Router()
@@ -1029,8 +1029,9 @@ async def deliver(bot: Bot, user_id: int, chat_id, reply_to: Message, state: FSM
             if member.status not in ("creator", "administrator"):
                 await reply_to.answer("❌ Ты не администратор этого чата.")
                 return
-        if "{my_id}" in json.dumps(d.get("buttons"), ensure_ascii=False):
-            d = apply_vars(d, {"my_id": str(user_id)})  # получатель подарка — тот, кто отправил пост
+        if "{my_" in json.dumps(d.get("buttons"), ensure_ascii=False):
+            me = await bot.get_chat(user_id)
+            d = apply_vars(d, me_vals(user_id, me.username))  # получатель подарка — тот, кто отправил пост
         d = start_timer(d)  # таймер «от отправки» стартует здесь, у каждого поста свой
         sent = await send_post(bot, chat.id, d)
     except (TelegramBadRequest, TelegramForbiddenError) as e:
@@ -1128,7 +1129,7 @@ async def inline_q(q: InlineQuery):
     for t, rest in picked[:10]:
         vals = parse_args(rest) if rest.strip() else None
         try:
-            r = inline_result(t, {**(vals or {}), "my_id": str(uid)}, rid=f"{t['id']}-{abs(hash(rest)) % 10**9}")
+            r = inline_result(t, {**(vals or {}), **me_vals(uid, q.from_user.username)}, rid=f"{t['id']}-{abs(hash(rest)) % 10**9}")
             if vals:
                 r.description = "✅ " + ", ".join(f"{{{k}}}={v[:20]}" for k, v in vals.items()
                                                  if k in ("link_text",) or k.isdigit())[:120]
@@ -1141,7 +1142,7 @@ async def inline_q(q: InlineQuery):
     if not results:
         for t in [t for t in access.templates_for(uid) if s.lower() in t["name"].lower()][:50]:
             try:
-                r = inline_result(t, {"my_id": str(uid)})
+                r = inline_result(t, me_vals(uid, q.from_user.username))
                 if has_vars(t["data"]):
                     r.description = f"Шаблон с переменными: «{t['name']} ссылка 500 …»"
                 results.append(r)
@@ -1205,7 +1206,7 @@ async def tpl_fill_in(m: Message, state: FSMContext):
         await m.answer("Шаблон не найден.")
         return
     d = db.empty_draft()
-    d.update(apply_vars(t["data"], {**parse_args(m.text), "my_id": str(m.from_user.id)}))
+    d.update(apply_vars(t["data"], {**parse_args(m.text), **me_vals(m.from_user.id, m.from_user.username)}))
     db.save_draft(m.from_user.id, d)
     await show_panel(m.bot, m.chat.id, m.from_user.id,
                      "✅ Заполнено. Это новый черновик — отправляй или правь (шаблон не изменился).")
