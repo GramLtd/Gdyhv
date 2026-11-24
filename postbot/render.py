@@ -213,6 +213,7 @@ LINK_PRESETS = [
     ("🔐 Прокси", "https://t.me/proxy?{x}", "server=..&port=..&secret=.."),
     ("⚙️ Настройки Telegram", "tg://settings", None),
     ("⭐ Telegram Premium", "tg://premium_offer", None),
+    ("🎁 Меню подарков → тому, кто отправил пост", "tg://send_gift?to={my_id}", None),
     ("🎁 Подарить Premium", "tg://premium_multigift", None),
     ("💫 Telegram Stars", "tg://stars", None),
     ("📂 Папки чатов", "tg://settings/folders", None),

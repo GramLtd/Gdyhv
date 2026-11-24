@@ -1029,6 +1029,8 @@ async def deliver(bot: Bot, user_id: int, chat_id, reply_to: Message, state: FSM
             if member.status not in ("creator", "administrator"):
                 await reply_to.answer("❌ Ты не администратор этого чата.")
                 return
+        if "{my_id}" in json.dumps(d.get("buttons"), ensure_ascii=False):
+            d = apply_vars(d, {"my_id": str(user_id)})  # получатель подарка — тот, кто отправил пост
         d = start_timer(d)  # таймер «от отправки» стартует здесь, у каждого поста свой
         sent = await send_post(bot, chat.id, d)
     except (TelegramBadRequest, TelegramForbiddenError) as e:
@@ -1126,7 +1128,7 @@ async def inline_q(q: InlineQuery):
     for t, rest in picked[:10]:
         vals = parse_args(rest) if rest.strip() else None
         try:
-            r = inline_result(t, vals, rid=f"{t['id']}-{abs(hash(rest)) % 10**9}")
+            r = inline_result(t, {**(vals or {}), "my_id": str(uid)}, rid=f"{t['id']}-{abs(hash(rest)) % 10**9}")
             if vals:
                 r.description = "✅ " + ", ".join(f"{{{k}}}={v[:20]}" for k, v in vals.items()
                                                  if k in ("link_text",) or k.isdigit())[:120]
@@ -1139,7 +1141,7 @@ async def inline_q(q: InlineQuery):
     if not results:
         for t in [t for t in access.templates_for(uid) if s.lower() in t["name"].lower()][:50]:
             try:
-                r = inline_result(t)
+                r = inline_result(t, {"my_id": str(uid)})
                 if has_vars(t["data"]):
                     r.description = f"Шаблон с переменными: «{t['name']} ссылка 500 …»"
                 results.append(r)
@@ -1203,7 +1205,7 @@ async def tpl_fill_in(m: Message, state: FSMContext):
         await m.answer("Шаблон не найден.")
         return
     d = db.empty_draft()
-    d.update(apply_vars(t["data"], parse_args(m.text)))
+    d.update(apply_vars(t["data"], {**parse_args(m.text), "my_id": str(m.from_user.id)}))
     db.save_draft(m.from_user.id, d)
     await show_panel(m.bot, m.chat.id, m.from_user.id,
                      "✅ Заполнено. Это новый черновик — отправляй или правь (шаблон не изменился).")

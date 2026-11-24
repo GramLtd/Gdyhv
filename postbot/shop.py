@@ -286,7 +286,7 @@ async def finish_fill(bot: Bot, chat_id: int, uid: int, state: FSMContext):
     data = await state.get_data()
     t = db.get_template_any(data["tid"])
     d = db.empty_draft()
-    d.update(apply_vars(t["data"], data["vals"]))
+    d.update(apply_vars(t["data"], {**data["vals"], "my_id": str(uid)}))
     db.save_draft(uid, d)  # в черновике таймер ещё «от отправки»: у каждой отправки свой отсчёт
     await state.set_state(None)
     await state.update_data(last_tid=data["tid"], last_vals=data["vals"])
