@@ -46,6 +46,7 @@ class S(StatesGroup):
     target = State()
     emoji = State()
     gift_to = State()
+    btn_popup = State()
     timer_until = State()
     timer_done = State()
     fill = State()
@@ -544,6 +545,9 @@ def btn_info(d: dict, r: int, i: int) -> str:
     if b["type"] == "page":
         t = db.get_template_any(int(val)) if val.isdigit() else None
         val = f"→ шаблон «{t['name']}»" if t else "→ шаблон удалён!"
+        pop = b.get("popup") or {}
+        if pop.get("text"):
+            val += (f"\n+ {'💬 окно' if pop.get('alert') else '🔔 уведомление'}: {pop['text']}")
     if b["type"] == "stars":
         val = "⭐ " + val.replace("|", " — ").rstrip(" —")
     return (f"\n<b>Кнопка:</b> {html.escape(b['text'])}\n"
@@ -555,9 +559,16 @@ def btn_info(d: dict, r: int, i: int) -> str:
 
 def btn_menu(d: dict, r: int, i: int) -> InlineKeyboardMarkup:
     k = f"{r}:{i}"
+    extra = []
+    if d["buttons"][r][i]["type"] == "page":
+        pop = d["buttons"][r][i].get("popup") or {}
+        extra = [cb("💬 Окно при нажатии" + (" ✅" if pop.get("text") else ""), f"bx:pop:{k}")]
+        if pop.get("text"):
+            extra.append(cb("Тип: " + ("💬 окно" if pop.get("alert") else "🔔 сверху"), f"bx:popt:{k}"))
     return kb(
         [cb("✏️ Текст", f"bx:txt:{k}"), cb("🔁 Действие", f"bx:act:{k}")],
         [cb("🎨 Цвет", f"bx:sty:{k}"), cb("✨ Иконка", f"bx:ico:{k}")],
+        extra,
         [cb("⬅️", f"bx:l:{k}"), cb("➡️", f"bx:r:{k}"),
          cb("⤴️ В ряд выше", f"bx:up:{k}"), cb("⤵️ Отдельный ряд", f"bx:dn:{k}")],
         [cb("🗑 Удалить", f"bx:del:{k}"), cb("🧩 Все кнопки", "bl")],
@@ -638,7 +649,22 @@ async def btn_action(c: CallbackQuery, state: FSMContext):
             reply_markup=kb([BACK]))
         return
 
-    if act == "sty":
+    if act == "pop":
+        await state.set_state(S.btn_popup)
+        await state.update_data(edit=[r, i])
+        await c.answer()
+        cur = (b.get("popup") or {}).get("text")
+        await c.message.edit_text(
+            "💬 Пришли текст, который покажется при нажатии (до 200 символов). Пост и кнопки "
+            "при этом сменятся на выбранный шаблон.\n«-» — убрать окно."
+            + (f"\n\nСейчас: <code>{html.escape(cur)}</code>" if cur else ""),
+            reply_markup=kb([BACK]))
+        return
+
+    if act == "popt" and b.get("popup"):
+        b["popup"]["alert"] = not b["popup"].get("alert")
+        note = "Окно по центру" if b["popup"]["alert"] else "Уведомление сверху"
+    elif act == "sty":
         keys = list(STYLES)
         b["style"] = keys[(keys.index(b.get("style")) + 1) % len(keys)]
         note = f"Цвет: {STYLES[b['style']]}"
@@ -677,6 +703,29 @@ async def btn_action(c: CallbackQuery, state: FSMContext):
     await c.answer(note)
     await c.message.edit_text("⚙️" + btn_info(d, r, i) + "\n\n<i>Превью обновится при возврате к посту.</i>",
                               reply_markup=btn_menu(d, r, i))
+
+
+@router.message(S.btn_popup, F.text)
+async def btn_popup_in(m: Message, state: FSMContext):
+    r, i = (await state.get_data())["edit"]
+    d = db.get_draft(m.from_user.id)
+    try:
+        b = d["buttons"][r][i]
+    except IndexError:
+        await state.clear()
+        await m.answer("Кнопка не найдена.", reply_markup=kb([BACK]))
+        return
+    v = m.text.strip()
+    if v == "-":
+        b.pop("popup", None)
+    elif len(v) > 200:
+        await m.answer("Слишком длинно: максимум 200 символов.")
+        return
+    else:
+        b["popup"] = {"text": v, "alert": (b.get("popup") or {}).get("alert", True)}
+    db.save_draft(m.from_user.id, d)
+    await state.clear()
+    await m.answer("✅ Сохранено." + btn_info(d, r, i), reply_markup=btn_menu(d, r, i))
 
 
 @router.callback_query(F.data.startswith("bat:"))
@@ -1498,7 +1547,9 @@ async def page_pick(c: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pg:"))
 async def page_press(c: CallbackQuery):
-    t = db.get_template_any(int(c.data.split(":")[1]))
+    parts = c.data.split(":")
+    t = db.get_template_any(int(parts[1]))
+    pop = db.get_popup(parts[2]) if len(parts) > 2 else None
     if not t:
         await c.answer("Эта кнопка больше не работает", show_alert=True)
         return
@@ -1520,7 +1571,10 @@ async def page_press(c: CallbackQuery):
         if "not modified" not in e.message:
             await c.answer("Не получилось обновить пост", show_alert=True)
             return
-    await c.answer()
+    if pop:
+        await c.answer(pop["text"], show_alert=bool(pop["alert"]))
+    else:
+        await c.answer()
 
 
 # ===================== таймер =====================

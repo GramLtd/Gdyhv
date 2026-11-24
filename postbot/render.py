@@ -128,7 +128,10 @@ def apply_vars(d: dict, vals: dict) -> dict:
     for row in out.get("buttons") or []:
         for b in row:
             b["text"] = sub(b["text"], False)[:64] or "•"
+            if b.get("popup") and b["popup"].get("text"):
+                b["popup"] = {**b["popup"], "text": sub(b["popup"]["text"], False)[:200]}
             if b["type"] in ("stars", "gift", "page"):
+                b["uid"] = db.new_uid()
                 continue
             v = sub(b.get("value") or "", False)
             if b["type"] == "url" and re.fullmatch(r"https?://(?:www\.)?link(?:\.[a-z]{2,6})?/?", v):
@@ -236,7 +239,13 @@ def build_button(b: dict) -> InlineKeyboardButton:
         db.put_popup(b["uid"], v, t == "alert")
         kw["callback_data"] = f"pp:{b['uid']}"
     elif t == "page":
-        kw["callback_data"] = f"pg:{v}"
+        pop = b.get("popup")
+        if pop and pop.get("text"):  # окно/уведомление + смена поста одной кнопкой
+            uid = b.setdefault("uid", db.new_uid())
+            db.put_popup(uid, pop["text"], bool(pop.get("alert")))
+            kw["callback_data"] = f"pg:{v}:{uid}"
+        else:
+            kw["callback_data"] = f"pg:{v}"
     elif t in ("stars", "gift"):
         kw["url"] = b["link"]
     elif t == "copy":
