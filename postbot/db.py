@@ -379,10 +379,42 @@ def add_purchase(uid: int, tid: int) -> None:
     conn().commit()
 
 
-def touch_user(uid: int, name: str) -> None:
+def _users_username_col():
+    cols = {r[1] for r in conn().execute("PRAGMA table_info(users)")}
+    if "username" not in cols:
+        conn().execute("ALTER TABLE users ADD COLUMN username TEXT")
+        conn().commit()
+
+
+def touch_user(uid: int, name: str, username: str | None = None) -> None:
     _init_access()
-    conn().execute("INSERT INTO users(user_id, name, seen) VALUES(?,?,?) ON CONFLICT(user_id) "
-                   "DO UPDATE SET name=excluded.name, seen=excluded.seen", (uid, name, int(time.time())))
+    _users_username_col()
+    conn().execute("INSERT INTO users(user_id, name, seen, username) VALUES(?,?,?,?) ON CONFLICT(user_id) "
+                   "DO UPDATE SET name=excluded.name, seen=excluded.seen, "
+                   "username=COALESCE(excluded.username, users.username)",
+                   (uid, name, int(time.time()), (username or "").lower() or None))
+    conn().commit()
+
+
+def user_by_username(username: str):
+    _init_access()
+    _users_username_col()
+    return conn().execute("SELECT * FROM users WHERE username=?",
+                          (username.lstrip("@").lower(),)).fetchone()
+
+
+def template_users(tid: int) -> list:
+    """Кому открыт шаблон (купили или выданы админом)."""
+    _init_access()
+    _users_username_col()
+    return conn().execute(
+        "SELECT p.user_id, u.name, u.username FROM purchases p LEFT JOIN users u ON u.user_id=p.user_id "
+        "WHERE p.tid=? ORDER BY p.created DESC", (tid,)).fetchall()
+
+
+def remove_purchase(uid: int, tid: int) -> None:
+    _init_access()
+    conn().execute("DELETE FROM purchases WHERE user_id=? AND tid=?", (uid, tid))
     conn().commit()
 
 

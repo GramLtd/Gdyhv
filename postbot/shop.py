@@ -34,6 +34,7 @@ class A(StatesGroup):
     price = State()
     prompt = State()
     mtext = State()
+    tpl_user = State()
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
@@ -156,7 +157,7 @@ async def shop_redirect(m: Message):
 @router.message(CommandStart(deep_link=True))
 async def start_deep(m: Message, command: CommandObject, state: FSMContext):
     await state.clear()
-    db.touch_user(m.from_user.id, m.from_user.full_name)
+    db.touch_user(m.from_user.id, m.from_user.full_name, m.from_user.username)
     arg = command.args or ""
     if arg.startswith("t_") and arg[2:].isdigit():
         await template_card(m.bot, m.chat.id, m.from_user.id, int(arg[2:]))
@@ -170,7 +171,7 @@ async def start_deep(m: Message, command: CommandObject, state: FSMContext):
 @router.message(Command("menu"))
 async def menu_cmd(m: Message, state: FSMContext):
     await state.clear()
-    db.touch_user(m.from_user.id, m.from_user.full_name)
+    db.touch_user(m.from_user.id, m.from_user.full_name, m.from_user.username)
     await user_home(m.bot, m.chat.id, m.from_user.id)
 
 
@@ -407,6 +408,19 @@ async def admin_guard(c: CallbackQuery, state: FSMContext):
             f"✏️ <b>{label}</b>\nСейчас:\n<code>{html.escape(cur)}</code>\n\nПришли новый текст "
             "(HTML: &lt;b&gt;, &lt;i&gt;…). Можно {price} и {title}, где это уместно. «-» — вернуть по умолчанию.",
             reply_markup=kb([cb("⬅️ Тексты", "a:mt")]))
+    elif act == "ua":
+        await state.set_state(A.tpl_user)
+        await state.update_data(tid=int(parts[2]))
+        await c.message.edit_text(
+            "➕ Кому открыть этот шаблон? Пришли:\n• ID пользователя (<code>123456789</code>)\n"
+            "• или @username (если он уже писал боту)\n• или перешли его сообщение.\n"
+            "Можно несколько через пробел или запятую.",
+            reply_markup=kb([cb("⬅️ Назад", f"a:t:{parts[2]}")]))
+    elif act == "ul":
+        await template_users_screen(c.message, int(parts[2]))
+    elif act == "ur":
+        db.remove_purchase(int(parts[3]), int(parts[2]))
+        await template_users_screen(c.message, int(parts[2]))
     elif act == "tl":
         await admin_templates(c)
     elif act == "t":
@@ -462,6 +476,69 @@ async def a_mtext(m: Message, state: FSMContext):
     await m.answer("✅ Сохранено.", reply_markup=kb([cb("📝 Тексты меню", "a:mt")]))
 
 
+def user_label(uid: int, name, username) -> str:
+    return (f"@{username}" if username else (name or str(uid)))[:40]
+
+
+async def template_users_screen(msg: Message, tid: int):
+    users = db.template_users(tid)
+    rows = [[cb(f"❌ {user_label(u['user_id'], u['name'], u['username'])} · {u['user_id']}",
+                f"a:ur:{tid}:{u['user_id']}")] for u in users[:40]]
+    rows.append([cb("➕ Добавить пользователя", f"a:ua:{tid}")])
+    rows.append([cb("⬅️ К шаблону", f"a:t:{tid}")])
+    text = (f"👥 <b>Доступ к шаблону</b> — {len(users)} чел.\nНажми на пользователя, чтобы забрать доступ."
+            if users else "👥 Пока ни у кого нет доступа к этому шаблону.")
+    await msg.edit_text(text, reply_markup=kb(*rows))
+
+
+@router.message(A.tpl_user)
+async def a_tpl_user(m: Message, state: FSMContext):
+    tid = (await state.get_data())["tid"]
+    found, bad = [], []
+    fwd = m.forward_origin
+    if fwd is not None:
+        u = getattr(fwd, "sender_user", None)
+        if not u:
+            await m.answer("У этого пользователя скрыта пересылка — пришли его ID или @username.")
+            return
+        db.touch_user(u.id, u.full_name, u.username)
+        found.append((u.id, user_label(u.id, u.full_name, u.username)))
+    else:
+        for tok in re.split(r"[\s,]+", (m.text or "").strip()):
+            if not tok:
+                continue
+            if tok.lstrip("-").isdigit():
+                found.append((int(tok), tok))
+            elif re.fullmatch(r"@?\w{4,32}", tok):
+                row = db.user_by_username(tok)
+                if row:
+                    found.append((row["user_id"], "@" + row["username"]))
+                else:
+                    bad.append(tok)
+            else:
+                bad.append(tok)
+    for uid, _ in found:
+        db.add_purchase(uid, tid)
+        r = db.shop_get(tid)
+        try:
+            await (access.SHOP_BOT.get("bot") or m.bot).send_message(uid, f"🎁 Тебе открыт шаблон «{html.escape(r['title'] if r else '')}».",
+                                     reply_markup=kb([cb("✍️ Создать пост", f"u:f:{tid}")]))
+        except Exception:  # noqa: BLE001 — пользователь ещё не писал этому боту
+            pass
+    text = ""
+    if found:
+        text += "✅ Доступ открыт: " + ", ".join(html.escape(l) for _, l in found)
+    if bad:
+        text += ("\n" if text else "") + ("❓ Не нашёл: " + ", ".join(html.escape(b) for b in bad) +
+                                           "\n@username работает, только если человек уже писал боту — "
+                                           "иначе пришли ID.")
+    if not found:
+        await m.answer(text or "Пришли ID, @username или перешли сообщение.")
+        return
+    await state.clear()
+    await m.answer(text, reply_markup=kb([cb("👥 Доступ", f"a:ul:{tid}"), cb("⬅️ К шаблону", f"a:t:{tid}")]))
+
+
 async def admin_templates(c: CallbackQuery):
     rows = []
     for t in db.list_templates(c.from_user.id)[:50]:
@@ -503,6 +580,9 @@ async def admin_tpl(bot: Bot, msg: Message | None, tid: int, chat_id: int | None
         rows.append([cb("💲 Цена", f"a:pr:{tid}")])
     rows.append([cb("✏️ Название", f"a:ti:{tid}"), cb("📝 Описание", f"a:de:{tid}")])
     rows += [[cb(f"❓ Вопрос для {{{k}}}", f"a:pq:{tid}:{k}")] for k in keys]
+    n_users = len(db.template_users(tid))
+    rows.append([cb("➕ Добавить пользователя", f"a:ua:{tid}"),
+                 cb(f"👥 Доступ ({n_users})", f"a:ul:{tid}")])
     rows.append([cb("👁 Как видит пользователь", f"u:t:{tid}")])
     rows.append([cb("🗑 Убрать из магазина", f"a:rm:{tid}"), cb("⬅️ Шаблоны", "a:tl")])
     if msg:

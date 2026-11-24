@@ -67,7 +67,7 @@ class AccessMiddleware(BaseMiddleware):
         if isinstance(event, Message):
             if event.successful_payment or event.chat.type != "private":
                 return await handler(event, data)
-            db.touch_user(user.id, user.full_name)
+            db.touch_user(user.id, user.full_name, user.username)
             if redirect:
                 await shop.shop_redirect(event)
                 return None
@@ -98,6 +98,7 @@ async def main():
         BOTS[shop_bot.id] = shop_bot
         SHOP_IDS.add(shop_bot.id)
         access.SHOP_BOT["username"] = (await shop_bot.me()).username
+        access.SHOP_BOT["bot"] = shop_bot
         await shop_bot.set_my_commands([BotCommand(command="menu", description="Шаблоны")])
     dp = Dispatcher()
     for obs in (dp.message, dp.callback_query, dp.inline_query):
