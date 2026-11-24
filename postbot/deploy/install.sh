@@ -6,9 +6,9 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"   # .../postbot
 SERVICE=postbot
 
-echo "==> Ставлю Python"
-apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip >/dev/null
+echo "==> Ставлю Python (если система сама обновляется — подожду до 15 минут)"
+apt-get -o DPkg::Lock::Timeout=900 update -qq
+apt-get -o DPkg::Lock::Timeout=900 install -y -qq python3 python3-venv python3-pip >/dev/null
 
 echo "==> Виртуальное окружение и зависимости"
 python3 -m venv "$DIR/.venv"
