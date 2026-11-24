@@ -184,9 +184,6 @@ body{background:var(--bg);overflow-x:hidden}
 .card,.group,.kpis{position:relative;overflow:hidden;border-radius:22px}
 .card::before,.group::before,.kpis::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:0;
   background:linear-gradient(135deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 35%,rgba(255,255,255,0) 70%,rgba(255,255,255,.06) 100%)}
-.card::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;pointer-events:none;
-  background:linear-gradient(100deg,transparent,rgba(255,255,255,.10),transparent);transform:skewX(-18deg);animation:sheen 7s ease-in-out infinite}
-.card:nth-of-type(2)::after{animation-delay:-3s}
 @keyframes sheen{0%,70%{left:-60%}100%{left:130%}}
 .card > *,.group > *{position:relative;z-index:1}
 .kpis{gap:0;background:var(--glass-bg)!important}
@@ -211,8 +208,6 @@ body{background:var(--bg);overflow-x:hidden}
 .btn,.bal-actions .pill{position:relative;overflow:hidden;border-radius:14px}
 .btn.primary,.bal-actions .pill:first-child{background:linear-gradient(180deg,#FF8A2A,#F05A00);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 8px 24px -8px rgba(255,107,10,.8)}
-.btn.primary::after,.bal-actions .pill:first-child::after{content:"";position:absolute;top:0;left:-80%;width:50%;height:100%;
-  background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg);animation:sheen 3.6s ease-in-out infinite}
 .btn.tinted,.bal-actions .pill{background:rgba(255,255,255,.08);border:1px solid var(--glass-br);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 .pill{border-radius:10px}
 .btn .rip{position:absolute;border-radius:50%;background:rgba(255,255,255,.45);transform:scale(0);animation:rip .6s ease-out forwards;pointer-events:none}
@@ -266,6 +261,17 @@ body{background:var(--bg);overflow-x:hidden}
 :root:not([data-theme="dark"]) .btn.tinted,:root:not([data-theme="dark"]) .bal-actions .pill:last-child{background:rgba(16,24,40,.05);border-color:rgba(16,24,40,.1)}
 .logo{background:none!important;box-shadow:0 4px 16px -2px rgba(255,102,0,.55)!important;border-radius:50%!important}.logo svg{width:30px!important;height:30px!important}
 .hub::after{display:none}
+.digits{display:inline-flex}
+.balance b .digits,.mined .digits{font-size:inherit!important;color:inherit!important;margin:0!important;font-family:inherit!important;font-weight:inherit!important}
+.digits i{font-style:normal;display:inline-block}
+.digits i.roll{animation:roll .42s cubic-bezier(.22,1,.36,1)}
+@keyframes roll{0%{transform:translateY(55%);opacity:0;filter:blur(2px)}100%{transform:none;opacity:1;filter:none}}
+.balance b.bump{animation:none}
+.balance b.bump #bal-n{animation:glowN 1.2s ease}
+@keyframes glowN{30%{color:var(--accent);text-shadow:0 0 18px rgba(255,107,10,.45)}}
+.page.on > *{animation-duration:.75s!important}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.btn .rip{background:rgba(255,255,255,.25)}
 </style>
 </head>
 <body>
@@ -301,7 +307,7 @@ body{background:var(--bg);overflow-x:hidden}
 <section id="home" class="page on">
   <div class="card balance">
     <div class="card-h" style="margin-bottom:6px"><span>Баланс кошелька</span><div class="chip" id="lvlchip">Ур. 1</div></div>
-    <b class="num" id="bal">0.000000<span>XMR</span></b>
+    <b class="num" id="bal"><span id="bal-n" class="digits"></span><span id="bal-c">XMR</span></b>
     <div class="sub" style="margin-top:4px">Monero · доступно к выводу</div>
     <div class="bal-actions"><button class="pill" id="depopen">Пополнить</button><button class="pill" id="wdopen">Вывести</button></div>
   </div>
@@ -317,7 +323,7 @@ body{background:var(--bg);overflow-x:hidden}
             transform="rotate(-90 100 100)" stroke-dasharray="590.6" stroke-dashoffset="590.6"/>
         </svg>
         <div class="fan">
-          <div class="glow"></div>
+          
           <svg viewBox="0 0 200 200">
             <defs>
               <radialGradient id="bl" cx="100" cy="100" r="96" gradientUnits="userSpaceOnUse">
@@ -330,11 +336,11 @@ body{background:var(--bg);overflow-x:hidden}
           <svg class="blur" viewBox="0 0 200 200"><use href="#blades"/></svg>
           <div class="hub"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.6" fill="#fff"/><path fill="#FF6600" d="M12 0C5.365 0 0 5.373 0 12.015c0 1.335.228 2.607.618 3.81h3.577V5.729L12 13.545l7.805-7.815v10.095h3.577c.389-1.203.618-2.475.618-3.81C24 5.375 18.635 0 12 0z"/><path fill="#4C4C4C" d="M10.212 15.307l-3.417-3.421v6.351H1.758C3.87 21.689 7.678 24 12 24s8.162-2.311 10.245-5.764h-5.04v-6.351l-3.386 3.421-1.788 1.79-1.814-1.79z"/></svg></div>
         </div>
-        <div class="sparks" id="sparks"></div>
+        
       </div>
       <div class="rig-info">
         <small>Накоплено</small>
-        <div class="mined num" id="mined">0.0000000000<span id="minedcoin"></span></div>
+        <div class="mined num" id="mined"><span id="mined-n" class="digits"></span><span id="minedcoin"></span></div>
         <div class="sub" id="rate">— KH/s</div>
         <div class="bar"><i id="fill"></i></div>
         <div class="sub" id="fill-tx" style="margin-top:6px;font-size:11.5px"></div>
@@ -524,12 +530,6 @@ for (let i = 0; i < NB; i++) {
   g.innerHTML = `<path d="${BLADE}" fill="url(#bl)"/><path d="${BLADE}" fill="url(#bh)"/><path d="M100 75 C 124 60, 152 44, 178 50" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.2"/>`;
   blades.appendChild(g);
 }
-for (let i = 0; i < 14; i++) {
-  const b = document.createElement('b');
-  b.style.setProperty('--a', (Math.random() * 360) + 'deg'); b.style.animationDelay = (Math.random() * 1.6) + 's';
-  b.style.animationDuration = (1.2 + Math.random()) + 's';
-  $('sparks').append(b);
-}
 /* ripple на кнопках */
 document.addEventListener('pointerdown', e => {
   const b = e.target.closest('.btn,.pill'); if (!b) return;
@@ -556,7 +556,7 @@ let S = null, base = 0, t0 = 0;
 const RING = 590.6;
 function render(s) {
   S = s; base = s.pending; t0 = performance.now();
-  $('bal').innerHTML = ''; $('bal').append(fmt(s.balance, 6), el('span', {}, s.coin));
+  tween('bal', s.balance, 6, v => setDigits($('bal-n'), fmt(v, 6))); $('bal-c').textContent = s.coin;
   $('minedcoin').textContent = ' ' + s.coin;
   $('lvlchip').textContent = s.boost ? `×${s.boost.mult} буст` : `Ур. ${s.level}`;
   $('lvlchip').className = 'chip' + (s.boost ? ' boost' : '');
@@ -565,7 +565,7 @@ function render(s) {
   $('upginfo').textContent = n ? `Следующий уровень — ${n.hashrate} KH/s за ${n.price} ${s.coin}` : 'Достигнут максимальный уровень';
   const kh = +s.hashrate.toFixed(1);
   $('k-hr').innerHTML = ''; $('k-hr').append(kh.toLocaleString('ru'), el('em', {}, 'KH/s'));
-  $('k-day').innerHTML = ''; $('k-day').append(fmt(s.rate_per_sec * 86400, 5), el('em', {}, s.coin));
+  $('k-day').innerHTML = '<span></span>'; $('k-day').append(el('em', {}, s.coin)); tween('day', s.rate_per_sec * 86400, 5, v => $('k-day').firstChild.textContent = fmt(v, 5));
   $('k-lvl').innerHTML = ''; $('k-lvl').append(String(s.level), el('em', {}, `/ ${s.max_level}`));
   $('k-store').innerHTML = ''; $('k-store').append(String(s.storage_hours), el('em', {}, 'ч'));
   $('rig-id').textContent = String(tg.initDataUnsafe?.user?.id || 0).slice(-5).padStart(5, '0');
@@ -590,11 +590,38 @@ function drawChart(kh) {
     + `<path d="${d}L300 84L0 84Z" fill="url(#cg)"/><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.8" vector-effect="non-scaling-stroke"/>`;
   $('k-avg').textContent = `ср. ${(pts.reduce((a, b) => a + b) / N).toFixed(1)} KH/s`;
 }
+let lastM = 0;
+const TW = {};
+function tween(key, to, dec, draw) {
+  const st = TW[key] || (TW[key] = { v: to });
+  const from = st.v, t0 = performance.now(), dur = 900;
+  cancelAnimationFrame(st.raf);
+  if (from === to) return draw(to);
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 4);
+    st.v = from + (to - from) * e; draw(st.v);
+    if (k < 1) st.raf = requestAnimationFrame(step); else st.v = to;
+  };
+  st.raf = requestAnimationFrame(step);
+}
+function setDigits(box, str) {
+  const kids = box.children;
+  while (kids.length > str.length) box.lastChild.remove();
+  for (let i = 0; i < str.length; i++) {
+    let d = kids[i];
+    if (!d) { d = document.createElement('i'); box.append(d); }
+    if (d.dataset.c !== str[i]) {
+      const up = d.dataset.c !== undefined;
+      d.dataset.c = str[i]; d.textContent = str[i];
+      if (up) { d.classList.remove('roll'); void d.offsetWidth; d.classList.add('roll'); }
+    }
+  }
+}
 function tick() {
   if (S) {
     const max = S.rate_per_sec * S.storage_hours * 3600;
     const v = Math.min(base + S.rate_per_sec * (performance.now() - t0) / 1000, max);
-    const m = $('mined'); m.firstChild ? m.firstChild.nodeValue = fmt(v, 10) : m.prepend(fmt(v, 10));
+    if (performance.now() - lastM > 260) { lastM = performance.now(); setDigits($('mined-n'), fmt(v, 9)); }
     $('ring').style.strokeDashoffset = RING * (1 - v / max);
     $('fill').style.width = (100 * v / max).toFixed(1) + '%';
     $('fill-tx').textContent = `Заполнено ${Math.floor(100 * v / max)}% · лимит ${S.storage_hours} ч`;
